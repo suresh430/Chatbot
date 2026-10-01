@@ -1,0 +1,52 @@
+# Drop this file into YOUR website repo as .github/workflows/refresh-kb.yml
+# to keep the chatbot's knowledge base in sync with docs.cloudify.biz automatically.
+#
+# How it works:
+#   1. Every night it downloads the latest docs (llms-full.txt) and rebuilds kb.json
+#   2. It commits the new kb.json back to the repo
+#   3. If you serve the widget files from GitHub Pages, the live chatbot picks up
+#      the new answers immediately (the widget cache-busts kb.json on every load)
+#
+# Requirements:
+#   - build_kb_llms.py and build_kb.py committed in the repo (same folder as this workflow expects: repo root)
+#   - GitHub Pages serving the repo (or copy kb.json to your own static host in a deploy step)
+#   - Workflow write permission: repo Settings -> Actions -> General -> Workflow permissions -> "Read and write"
+
+name: Refresh chatbot KB
+
+on:
+  schedule:
+    - cron: "30 3 * * *"   # ~09:00 IST daily
+  workflow_dispatch:          # allow manual runs from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-kb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Rebuild kb.json from docs.cloudify.biz
+        run: |
+          python3 build_kb_llms.py --site https://docs.cloudify.biz --out kb.new.json
+          python3 -c "
+          import json, os
+          kb = json.load(open('kb.new.json'))
+          assert kb['chunk_count'] > 1000, 'suspiciously small KB, aborting'
+          os.replace('kb.new.json', 'kb.json')
+          print('kb.json refreshed:', kb['chunk_count'], 'chunks from', kb['page_count'], 'pages')
+          "
+
+      - name: Commit updated kb.json
+        run: |
+          git config user.name "chatbot-kb-bot"
+          git config user.email "chatbot-kb-bot@users.noreply.github.com"
+          git add kb.json
+          git diff --cached --quiet || git commit -m "chore: refresh chatbot KB from docs.cloudify.biz"
+          git push
