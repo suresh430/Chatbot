@@ -392,9 +392,14 @@ var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, e
   combosForApp: combosForApp, comboHasApp: comboHasApp, isGettingStarted: isGettingStarted,
   gettingStartedCard: gettingStartedCard, richAnswerHtml: richAnswerHtml,
   closingFor: closingFor, supportLine: supportLine, isTrouble: isTrouble,
+  memoryFilter: memoryFilter, answerFromKB: answerFromKB,
+  getActiveCombo: function () { return activeCombo; },
+  setActiveCombo: function (c) { activeCombo = c; },
+  setKbIndex: function (idx) { kbIndex = idx; },
   topCombos: topCombos, comboOrder: comboOrder,
   correctSpelling: correctSpelling, cleanText: cleanText, editDistance: editDistance };
 if (typeof module !== "undefined" && module.exports) module.exports = ChatEngine;
+var comboIndexCache = {}; // lazily built per-combo search indexes
 
 var CONTACT_URL = "https://cloudify.biz/contact";
 var BOOK_URL = "https://meetings.hubspot.com/cloudify/app-assistance";
@@ -610,9 +615,8 @@ function escapeHtml(s) {
 }
 
 /* ---------- chat behavior ---------- */
-var opened = false, kbIndex = null, kbMeta = null, kbFailed = false, pendingCombo = null;
+var opened = false, kbIndex = null, kbMeta = null, kbFailed = false, pendingCombo = null, activeCombo = null;
 var followupsShown = false; // generic follow-up chips show only after the first answer
-var comboIndexCache = {};
 // lazily built search index over a single combo's chunks (for picked integrations)
 function indexForCombo(combo) {
   if (!comboIndexCache[combo]) {
@@ -734,7 +738,20 @@ function richAnswerHtml(d, q) {
   return html;
 }
 
-function answerFromKB(q, comboFilter) {
+/* Once the visitor has settled on an integration (named it distinctively or picked
+ * a chip), remember it for the rest of the conversation so follow-up questions
+ * don't get asked "which app?" again. A question naming an app outside the
+ * remembered combo starts fresh. */
+function memoryFilter(qnorm) {
+  if (!activeCombo) return null;
+  var named = namedApps(qnorm), i;
+  for (i = 0; i < named.length; i++) {
+    if (!comboHasApp(activeCombo, named[i])) return null; // different app -> fresh
+  }
+  return activeCombo;
+}
+
+function answerFromKB(q, comboFilter, isMemory) {
   var qnorm = q.toLowerCase().replace(/-/g, " ");
   var index = kbIndex;
   if (comboFilter) {
@@ -744,18 +761,37 @@ function answerFromKB(q, comboFilter) {
       pendingCombo = null;
       return {
         html: "Please <b>submit a support ticket</b> by emailing <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> — include the exact error message, screenshots, and any order or transaction references, and our team will take it from there. 🤝",
-        chips: CFG.chips
+        chips: (typeof CFG !== "undefined" && CFG.chips) || []
       };
     }
   }
-  var results = search(index, expandQuery(q), 15).filter(goodMatch);
+  var query = q;
+  if (isMemory && comboFilter) {
+    // The visitor is continuing in the remembered integration's context: restore the
+    // combo's app names for retrieval, so "Facing issue while connecting" is read as
+    // connecting *HubSpot with Xero* here. Guard: only when the question matches
+    // something on its own — otherwise nonsense would get force-answered on the
+    // combo terms alone.
+    var probe = search(index, expandQuery(q), 3);
+    if (probe.length > 0 && probe[0].score > 0) {
+      query = q + " " + comboFilter.replace(/\//g, " ");
+    } else {
+      return answerFromKB(q, null, false);
+    }
+  }
+  var results = search(index, expandQuery(query), 15).filter(goodMatch);
   // once the visitor picked an integration, never ask again - answer it directly
   var d = decideAnswer(results, qnorm, kbIndex.combos, !!comboFilter, index);
+  if (d.type === "fallback" && isMemory) {
+    // the remembered integration has nothing on this question — answer it fresh
+    // (normal flow) instead of dead-ending with a ticket message
+    return answerFromKB(q, null, false);
+  }
   if (d.type === "fallback") {
     pendingCombo = null;
     return {
       html: "Please <b>submit a support ticket</b> by emailing <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> — include the exact error message, screenshots, and any order or transaction references, and our team will take it from there. 🤝",
-      chips: CFG.chips
+      chips: (typeof CFG !== "undefined" && CFG.chips) || []
     };
   }
   if (d.type === "disambiguate") {
@@ -765,6 +801,9 @@ function answerFromKB(q, comboFilter) {
     return { html: d.html, chips: d.labels };
   }
   pendingCombo = null;
+  // remember the combo this answer came from for follow-up questions
+  var answeredCombo = comboFilter || comboOf(d.primary.chunk.url);
+  if (answeredCombo) activeCombo = answeredCombo;
   // rich "getting started" card for installation questions about an integration
   // with verified links (marketplace, video, trial); other combos keep the
   // specific docs answer
@@ -890,8 +929,11 @@ function handleUser(text) {
     answerWhenReady(text, 6);
     return;
   }
-  var a = answerFromKB(text);
-  botSay(a.html, a.chips);
+  // continue the conversation in the remembered integration's context instead of
+  // asking "which app?" again — unless the question names a different app
+  var memFilter = memoryFilter(text.toLowerCase().replace(/-/g, " "));
+  var a = answerFromKB(text, memFilter, !!memFilter);
+  sayAnswer(a);
 }
 
 /* ---------- API mode: POST to backend, fall back to local KB on failure ---------- */
