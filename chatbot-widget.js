@@ -60,7 +60,13 @@ function buildIndex(chunks) {
     }
     return { v: v, norm: Math.sqrt(norm) || 1 };
   });
-  return { chunks: chunks, idf: idf, vecs: vecs, N: N };
+  // combo catalog: "pipedrive/xero" -> chunk count (for "show all combos" disambiguation)
+  var combos = {};
+  chunks.forEach(function (c) {
+    var k = comboOf(c.url);
+    if (k) combos[k] = (combos[k] || 0) + 1;
+  });
+  return { chunks: chunks, idf: idf, vecs: vecs, N: N, combos: combos };
 }
 
 function search(index, query, topK) {
@@ -201,16 +207,31 @@ function namedApps(qnorm) {
 }
 function comboHasApp(key, app) {
   var want = (APP_LABELS[app] || app).toLowerCase();
-  var segs = key.split("/"), i;
+  var segs = key.split("/"), i, j;
   for (i = 0; i < segs.length; i++) {
-    if (segs[i] === app) return true;
-    if ((APP_LABELS[segs[i]] || "").toLowerCase() === want) return true;
+    var seg = segs[i].toLowerCase();
+    if (seg === app) return true;
+    if ((APP_LABELS[seg] || "").toLowerCase() === want) return true;
+    var parts = seg.split("-"); // composite segs like "woocommerce-xero"
+    for (j = 0; j < parts.length; j++) {
+      if (parts[j] === app) return true;
+      if ((APP_LABELS[parts[j]] || "").toLowerCase() === want) return true;
+    }
   }
   return false;
 }
+// every combo containing this app, most-documented first: "xero" -> ["pipedrive/xero","hubspot/xero",...]
+function combosForApp(combos, app) {
+  var out = [];
+  Object.keys(combos).forEach(function (key) {
+    if (comboHasApp(key, app)) out.push(key);
+  });
+  out.sort(function (a, b) { return combos[b] - combos[a]; });
+  return out;
+}
 // Pure decision: given ranked good matches, answer directly, ask which combo,
 // or fall back. Never returns a "related" source from a different combo.
-function decideAnswer(results, qnorm) {
+function decideAnswer(results, qnorm, combos) {
   if (!results.length) return { type: "fallback" };
   var topCb = comboOf(results[0].chunk.url);
   if (topCb) {
@@ -223,7 +244,7 @@ function decideAnswer(results, qnorm) {
       // ambiguous across integrations — but only ask when the visitor named an
       // app; otherwise there is no signal to disambiguate on, so answer directly
       var named = namedApps(qnorm);
-      if (named.length) {
+      if (named.length && combos) {
         // ...unless the visitor already named one combo's app ("Xero in Pipedrive")
         var runner = order[1], namedIt = false;
         for (i = 0; i < named.length; i++) {
@@ -232,13 +253,29 @@ function decideAnswer(results, qnorm) {
           }
         }
         if (!namedIt) {
-          var labels = [], options = {};
-          for (i = 0; i < Math.min(order.length, 4); i++) {
-            var label = comboLabel(order[i]);
-            labels.push(label);
-            options[label] = order[i];
+          // pivot = the named app the ambiguous combos share ("xero")
+          var pivot = null, pivotCount = 0, a, c;
+          for (i = 0; i < named.length; i++) {
+            c = 0;
+            for (a = 0; a < order.length; a++) {
+              if (comboHasApp(order[a], named[i])) c++;
+            }
+            if (c > pivotCount) { pivotCount = c; pivot = named[i]; }
           }
-          return { type: "disambiguate", labels: labels, options: options };
+          if (pivot && pivotCount >= 2) {
+            // offer EVERY combo for that app — search hits first, then the rest
+            var seen = {}, labels = [], options = {};
+            var add = function (key) {
+              if (seen[key]) return;
+              seen[key] = 1;
+              var label = comboLabel(key);
+              labels.push(label);
+              options[label] = key;
+            };
+            order.forEach(function (key) { if (comboHasApp(key, pivot)) add(key); });
+            combosForApp(combos, pivot).forEach(add);
+            return { type: "disambiguate", labels: labels, options: options };
+          }
         }
       }
     }
@@ -253,7 +290,8 @@ function decideAnswer(results, qnorm) {
 }
 
 var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, expandQuery: expandQuery, goodMatch: goodMatch,
-  comboOf: comboOf, comboLabel: comboLabel, namedApps: namedApps, comboBoost: comboBoost, decideAnswer: decideAnswer };
+  comboOf: comboOf, comboLabel: comboLabel, namedApps: namedApps, comboBoost: comboBoost, decideAnswer: decideAnswer,
+  combosForApp: combosForApp, comboHasApp: comboHasApp };
 if (typeof module !== "undefined" && module.exports) module.exports = ChatEngine;
 
 /* ---------------- widget (browser only) ---------------- */
@@ -370,6 +408,16 @@ function escapeHtml(s) {
 
 /* ---------- chat behavior ---------- */
 var opened = false, kbIndex = null, kbMeta = null, kbFailed = false, pendingCombo = null;
+var comboIndexCache = {};
+// lazily built search index over a single combo's chunks (for picked integrations)
+function indexForCombo(combo) {
+  if (!comboIndexCache[combo]) {
+    var sub = kbIndex.chunks.filter(function (c) { return comboOf(c.url) === combo; });
+    if (!sub.length) return null;
+    comboIndexCache[combo] = buildIndex(sub);
+  }
+  return comboIndexCache[combo];
+}
 
 function scrollDown() { body.scrollTop = body.scrollHeight; }
 
@@ -419,13 +467,20 @@ function srcLink(chunk) {
 
 function answerFromKB(q, comboFilter) {
   var qnorm = q.toLowerCase().replace(/-/g, " ");
-  var results = search(kbIndex, expandQuery(q), 8);
+  var index = kbIndex;
   if (comboFilter) {
-    // visitor picked an integration: answer only from that combo's pages
-    results = results.filter(function (r) { return comboOf(r.chunk.url) === comboFilter; });
+    // visitor picked an integration: search only within that combo's pages
+    index = indexForCombo(comboFilter);
+    if (!index) {
+      pendingCombo = null;
+      return {
+        html: "I couldn't find that in our documentation. 🤔 Try asking about <b>installing</b>, <b>configuring</b>, or <b>troubleshooting</b> an integration — or <a href=\"" + CONTACT_URL + "\" target=\"_blank\" rel=\"noopener\">contact our team</a> directly and we'll help!",
+        chips: CFG.chips
+      };
+    }
   }
-  results = results.filter(goodMatch);
-  var d = decideAnswer(results, qnorm);
+  var results = search(index, expandQuery(q), 8).filter(goodMatch);
+  var d = decideAnswer(results, qnorm, kbIndex.combos);
   if (d.type === "fallback") {
     pendingCombo = null;
     return {
