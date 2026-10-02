@@ -294,17 +294,40 @@ function comboChips(keys) {
   });
   return { labels: labels, options: options };
 }
-function directAnswer(results, topCb) {
-  var primary = results[0], i;
-  // fuller, coherent answers: up to 3 top chunks from the primary's page, in page order
-  var pageChunks = [];
-  for (i = 0; i < results.length && pageChunks.length < 3; i++) {
-    if (results[i].chunk.url === primary.chunk.url) pageChunks.push(results[i].chunk);
+function pageSteps(index, primary, maxSteps) {
+  // steps for a rich answer: the primary chunk's page, in page order,
+  // starting one chunk before the primary (for context) — up to maxSteps.
+  // Gives the fallback and the AI rewrite enough material for real steps.
+  var url = primary.chunk.url, page = [], i, c;
+  for (i = 0; i < index.chunks.length; i++) {
+    c = index.chunks[i];
+    if (c.url === url) page.push(c);
   }
-  pageChunks.sort(function (a, b) { return (a._pos || 0) - (b._pos || 0); });
+  page.sort(function (a, b) { return (a._pos || 0) - (b._pos || 0); });
+  var start = 0;
+  for (i = 0; i < page.length; i++) {
+    if (page[i]._pos === primary.chunk._pos) { start = i; break; }
+  }
+  var from = Math.max(0, start - 1);
+  return page.slice(from, from + (maxSteps || 6));
+}
+function directAnswer(results, topCb, index) {
+  var primary = results[0], i;
+  var pageChunks;
+  if (index) {
+    // fuller, coherent answers: page-ordered steps from the primary's page
+    pageChunks = pageSteps(index, primary, 6);
+  } else {
+    // legacy path: up to 3 top chunks from the primary's page, in page order
+    pageChunks = [];
+    for (i = 0; i < results.length && pageChunks.length < 3; i++) {
+      if (results[i].chunk.url === primary.chunk.url) pageChunks.push(results[i].chunk);
+    }
+    pageChunks.sort(function (a, b) { return (a._pos || 0) - (b._pos || 0); });
+  }
   return { type: "answer", primary: primary, context: pageChunks };
 }
-function decideAnswer(results, qnorm, combos, forceDirect) {
+function decideAnswer(results, qnorm, combos, forceDirect, index) {
   if (!results.length) return { type: "fallback" };
   var topCb = comboOf(results[0].chunk.url);
   if (!forceDirect) {
@@ -358,7 +381,7 @@ function decideAnswer(results, qnorm, combos, forceDirect) {
         html: "Sure - I\u2019ll point you to the right guide. 🙂<br><br><b>Which integration is this about?</b>" };
     }
   }
-  return directAnswer(results, topCb);
+  return directAnswer(results, topCb, index);
 }
 
 function isGettingStarted(q) {
@@ -642,6 +665,37 @@ function srcLink(chunk) {
   return '<span class="cfb-src">📄 Source: <a href="' + escapeHtml(chunk.url) + '" target="_blank" rel="noopener">' + title + "</a></span>";
 }
 
+/* ---------- Lyro-style rich answer (deterministic) ----------
+ * Builds a structured answer from the page-ordered steps: opening line,
+ * numbered steps, guide sentence, source link, support email, follow-up.
+ * Used as the extractive fallback AND as the base the AI rewrite improves
+ * on — so answers stay rich even when the AI proxy is unreachable. */
+function richAnswerHtml(d) {
+  var primary = d.primary.chunk;
+  var title = primary.title || primary.url;
+  var steps = [], seen = {};
+  d.context.forEach(function (c) {
+    var t = cleanText(c.text);
+    if (!t || t.length < 10 || seen[t]) return;
+    seen[t] = 1;
+    if (t.length > 260) t = t.slice(0, 260).replace(/\s+\S*$/, "") + "…";
+    steps.push(t);
+  });
+  var html = "";
+  if (steps.length >= 2) {
+    html = "Here are the steps for <b>" + escapeHtml(title) + "</b>:<br><br><ol>" +
+      steps.map(function (s) { return "<li>" + escapeHtml(s) + "</li>"; }).join("") +
+      "</ol><br>";
+  } else if (steps.length === 1) {
+    html = escapeHtml(steps[0]) + "<br><br>";
+  }
+  html += "For detailed guidance, you can review our guide for " + escapeHtml(title) + ".<br>" +
+    srcLink(primary) +
+    '<br><br>Need more help? Reach us at <a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>." +
+    "<br><br>Is there anything specific you need help with? 😊";
+  return html;
+}
+
 function answerFromKB(q, comboFilter) {
   var qnorm = q.toLowerCase().replace(/-/g, " ");
   var index = kbIndex;
@@ -658,7 +712,7 @@ function answerFromKB(q, comboFilter) {
   }
   var results = search(index, expandQuery(q), 15).filter(goodMatch);
   // once the visitor picked an integration, never ask again - answer it directly
-  var d = decideAnswer(results, qnorm, kbIndex.combos, !!comboFilter);
+  var d = decideAnswer(results, qnorm, kbIndex.combos, !!comboFilter, index);
   if (d.type === "fallback") {
     pendingCombo = null;
     return {
@@ -680,9 +734,7 @@ function answerFromKB(q, comboFilter) {
   if (combo && COMBO_CARDS[combo] && isGettingStarted(q)) {
     return gettingStartedCard(combo);
   }
-  var ctxText = d.context.map(function (c) { return cleanText(c.text); }).join(" ");
-  var htmlOut = trimText(ctxText, 650) + srcLink(d.primary.chunk) +
-    '<br><br>Need more help? Reach us at <a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>.";
+  var htmlOut = richAnswerHtml(d);
   var chips = ["How do I connect my Xero account?", "How do I cancel my subscription?"];
   return {
     html: htmlOut, chips: chips,
