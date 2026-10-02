@@ -651,7 +651,7 @@ function answerFromKB(q, comboFilter) {
     if (!index) {
       pendingCombo = null;
       return {
-        html: "I couldn't find that in our documentation. 🤔 Try asking about <b>installing</b>, <b>configuring</b>, or <b>troubleshooting</b> an integration — or <a href=\"" + CONTACT_URL + "\" target=\"_blank\" rel=\"noopener\">contact our team</a> directly and we'll help!",
+        html: "I couldn't find that in our documentation. 🤔 Please <b>submit a support ticket</b> by emailing <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> — include the exact error message, screenshots, and any order or transaction references, and our team will take it from there.",
         chips: CFG.chips
       };
     }
@@ -662,7 +662,7 @@ function answerFromKB(q, comboFilter) {
   if (d.type === "fallback") {
     pendingCombo = null;
     return {
-      html: "I couldn't find that in our documentation. 🤔 Try asking about <b>installing</b>, <b>configuring</b>, or <b>troubleshooting</b> an integration — or <a href=\"" + CONTACT_URL + "\" target=\"_blank\" rel=\"noopener\">contact our team</a> directly and we'll help!",
+      html: "I couldn't find that in our documentation. 🤔 Please <b>submit a support ticket</b> by emailing <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> — include the exact error message, screenshots, and any order or transaction references, and our team will take it from there.",
       chips: CFG.chips
     };
   }
