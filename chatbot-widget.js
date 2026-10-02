@@ -508,7 +508,7 @@ function gettingStartedCard(combo, idx) {
 function intentReply(q) {
   var s = q.toLowerCase().trim();
   if (/^(hi|hii+|hello|hey|yo|namaste|good (morning|afternoon|evening))\b/.test(s) || s.length < 3 && /^(hi|hey)$/.test(s))
-    return { text: "Hello! 👋 Great to see you here. " + helpLine(), chips: CFG.chips };
+    return { text: "Hello! 👋 What would you like to know about our integrations?", chips: [] };
   if (/\b(thank|thanks|thx|dhanyavad)\b/.test(s))
     return { text: "You're very welcome! 😊 Anything else I can help with?", chips: CFG.chips };
   if (/\b(bye|goodbye|see you|good night)\b/.test(s))
@@ -772,20 +772,16 @@ function answerFromKB(q, comboFilter, isMemory) {
       };
     }
   }
-  var query = q;
-  if (isMemory && comboFilter) {
-    // The visitor is continuing in the remembered integration's context: restore the
-    // combo's app names for retrieval, so "Facing issue while connecting" is read as
-    // connecting *HubSpot with Xero* here. Guard: only when the question has a
-    // meaningful match on its own (score >= 0.25) — otherwise the combo terms alone
-    // would force weak matches (e.g. "show me steps" matching an errors page).
-    var probe = search(index, expandQuery(q), 3);
-    if (probe.length > 0 && probe[0].score >= 0.25) {
-      query = q + " " + comboFilter.replace(/\//g, " ");
-    }
-    // else: proceed unaugmented; falls through to the fallback handling below
+  var results = search(index, expandQuery(q), 15).filter(goodMatch);
+  if (isMemory && comboFilter && !results.length) {
+    // No strong match in the remembered combo's docs: accept a weaker in-context
+    // hit rather than failing outright — the sub-index is already combo-filtered,
+    // so top hits are relevant. (We do NOT inject the combo names into the query:
+    // that distorted rankings via title bonuses.) Truly vague questions are still
+    // caught by isVagueQuestion in the fallback below.
+    var weak = search(index, expandQuery(q), 5);
+    if (weak.length > 0 && weak[0].score >= 0.25) results = weak.slice(0, 3);
   }
-  var results = search(index, expandQuery(query), 15).filter(goodMatch);
   // once the visitor picked an integration, never ask again - answer it directly
   var d = decideAnswer(results, qnorm, kbIndex.combos, !!comboFilter, index);
   if (d.type === "fallback") {
