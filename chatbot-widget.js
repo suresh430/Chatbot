@@ -385,37 +385,20 @@ function decideAnswer(results, qnorm, combos, forceDirect, index) {
 }
 
 function isGettingStarted(q) {
-  return /\b(getting started|get started|how do i (start|begin|install|set ?up)|how to (start|begin|install|set ?up|get started)|install (the|this) integration)\b/i.test(q || "");
+  return /\b(getting started|get started|need (to )?set ?up|want (to )?set ?up|how (do|can|to) (i|we|you) (start|begin|install|set ?up)|how to (start|begin|install|set ?up|get started)|install (the|this|an?|my) (integration|app)|set ?up (the|this|an?|my) (integration|app))\b/i.test(q || "");
 }
 var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, expandQuery: expandQuery, goodMatch: goodMatch,
   comboOf: comboOf, comboLabel: comboLabel, namedApps: namedApps, comboBoost: comboBoost, decideAnswer: decideAnswer,
   combosForApp: combosForApp, comboHasApp: comboHasApp, isGettingStarted: isGettingStarted,
+  gettingStartedCard: gettingStartedCard, richAnswerHtml: richAnswerHtml,
+  closingFor: closingFor, supportLine: supportLine, isTrouble: isTrouble,
   topCombos: topCombos, comboOrder: comboOrder,
   correctSpelling: correctSpelling, cleanText: cleanText, editDistance: editDistance };
 if (typeof module !== "undefined" && module.exports) module.exports = ChatEngine;
 
-/* ---------------- widget (browser only) ---------------- */
-if (typeof window === "undefined" || typeof document === "undefined") return;
-
-var scriptTag = document.currentScript;
-function dataAttr(k, fb) {
-  return (scriptTag && scriptTag.getAttribute("data-" + k)) || fb;
-}
-var userCfg = window.CloudifyChat || {};
-var CFG = {
-  kbUrl:    userCfg.kbUrl    || dataAttr("kb", "kb.json"),
-  apiUrl:   userCfg.apiUrl   || dataAttr("api", ""), // e.g. https://your-api/chat — when set, the widget POSTs here instead of searching locally
-  rewriteUrl: userCfg.rewriteUrl || dataAttr("rewrite", ""), // e.g. https://xxx.workers.dev — when set, docs answers are rewritten by AI
-  name:     userCfg.name     || dataAttr("name", "Cloudify"),
-  color:    userCfg.color    || dataAttr("color", "#1d4ed8"),
-  position: userCfg.position || dataAttr("position", "right"), // right | left
-  welcome:  userCfg.welcome  || null,
-  chips:    userCfg.chips    || ["How do I connect my Xero account?", "How do I create an invoice from HubSpot?", "How do I cancel my subscription?"]
-};
 var CONTACT_URL = "https://cloudify.biz/contact";
 var BOOK_URL = "https://meetings.hubspot.com/cloudify/app-assistance";
 var SUPPORT_EMAIL = "support@cloudify.biz";
-
 /* ---------- per-integration "getting started" cards ----------
  * Curated links for the rich answers (marketplace listing, overview video,
  * trial). Setup Guide is derived from the docs at runtime; booking + support
@@ -426,6 +409,7 @@ var COMBO_CARDS = {
     app: "HubSpot Marketplace",
     appUrl: "https://ecosystem.hubspot.com/marketplace/apps/xero-sync-3387409",
     videoId: "JypOwjEhAp0",
+    videoTitle: "HS Xero Onboarding",
     trialText: "Includes 30 invoice syncs over 30 days",
     trialUrl: "https://app.hubspot.com/marketplace/23395533/listing/xero-sync-3387409"
   },
@@ -433,6 +417,7 @@ var COMBO_CARDS = {
     app: "Pipedrive Marketplace",
     appUrl: "https://www.pipedrive.com/en/marketplace/app/xero/b217602d14d86f39",
     videoId: "3XKwrCnaEJE",
+    videoTitle: "How to start using the Pipedrive-Xero integration from Cloudify",
     trialText: "Free trial with 15 syncs, no credit card required",
     trialUrl: ""
   },
@@ -452,49 +437,74 @@ var COMBO_CARDS = {
     setupGuide: "https://docs.cloudify.biz/woocommerce-xero/getting-started/overview"
   }
 };
+
+/* ---------------- widget (browser only) ---------------- */
+if (typeof window === "undefined" || typeof document === "undefined") return;
+
+var scriptTag = document.currentScript;
+function dataAttr(k, fb) {
+  return (scriptTag && scriptTag.getAttribute("data-" + k)) || fb;
+}
+var userCfg = window.CloudifyChat || {};
+var CFG = {
+  kbUrl:    userCfg.kbUrl    || dataAttr("kb", "kb.json"),
+  apiUrl:   userCfg.apiUrl   || dataAttr("api", ""), // e.g. https://your-api/chat — when set, the widget POSTs here instead of searching locally
+  rewriteUrl: userCfg.rewriteUrl || dataAttr("rewrite", ""), // e.g. https://xxx.workers.dev — when set, docs answers are rewritten by AI
+  name:     userCfg.name     || dataAttr("name", "Cloudify"),
+  color:    userCfg.color    || dataAttr("color", "#1d4ed8"),
+  position: userCfg.position || dataAttr("position", "right"), // right | left
+  welcome:  userCfg.welcome  || null,
+  chips:    userCfg.chips    || ["How do I connect my Xero account?", "How do I create an invoice from HubSpot?", "How do I cancel my subscription?"]
+};
+
 // shortest installation/getting-started docs URL for a combo
-function setupGuideUrl(combo) {
+function setupGuideUrl(combo, idx) {
   var curated = COMBO_CARDS[combo] && COMBO_CARDS[combo].setupGuide;
   if (curated) return curated;
+  var kb = idx || ((typeof kbIndex !== "undefined") ? kbIndex : null);
+  if (!kb) return null;
   var best = null;
-  kbIndex.chunks.forEach(function (c) {
+  kb.chunks.forEach(function (c) {
     if (comboOf(c.url) !== combo) return;
     if (c.url.indexOf("/installation/") === -1 && c.url.indexOf("/getting-started/") === -1) return;
     if (!best || c.url.length < best.length) best = c.url;
   });
   return best;
 }
-function gettingStartedCard(combo) {
+function gettingStartedCard(combo, idx) {
   var info = COMBO_CARDS[combo] || {};
-  var guide = setupGuideUrl(combo);
+  var guide = setupGuideUrl(combo, idx);
   var label = comboLabel(combo);
-  var rows = [];
-  if (guide) {
-    rows.push('📖 <b>Setup Guide:</b> Follow the step-by-step instructions here: <a href="' + escapeHtml(guide) + '" target="_blank" rel="noopener">Setup Guide</a>');
-  }
+  var n = 0, items = [];
+  function item(lead, rest) { items.push((++n) + ". <b>" + lead + "</b> – " + rest); }
+  function extLink(url, text) { return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(text) + "</a>"; }
   if (info.appUrl) {
-    rows.push('🛒 <b>Get the App:</b> Available on the ' + escapeHtml(info.app || "marketplace") + ': <a href="' + escapeHtml(info.appUrl) + '" target="_blank" rel="noopener">Get the app</a>');
+    item("Get the app", "Install it from the " + escapeHtml(info.app || "marketplace") + ": " + extLink(info.appUrl, "Get the app"));
+  }
+  if (guide) {
+    item("Follow the Setup Guide", "A full step-by-step guide is available here: " + extLink(guide, "Setup Guide"));
   }
   if (info.videoId) {
-    rows.push('🎥 <b>Video Guide:</b> Watch an overview: <a href="https://www.youtube.com/watch?v=' + escapeHtml(info.videoId) + '" target="_blank" rel="noopener">YouTube Video</a>');
+    item("Watch the video guide", "A video walkthrough is available on " + extLink("https://www.youtube.com/watch?v=" + info.videoId, "YouTube"));
   }
   if (info.trialText) {
-    var trial = '🆓 <b>Free Trial:</b> ' + escapeHtml(info.trialText);
     if (info.trialUrl) {
-      trial += ': <a href="' + escapeHtml(info.trialUrl) + '" target="_blank" rel="noopener">Start free trial</a>';
+      item("Try it free", "Start a 30-day free trial (" + escapeHtml(info.trialText.charAt(0).toLowerCase() + info.trialText.slice(1)) + "): " + extLink(info.trialUrl, "Start free trial"));
     } else {
-      trial += ".";
+      item("Try it free", escapeHtml(info.trialText) + ".");
     }
-    rows.push(trial);
   }
-  rows.push('📅 <b>Onboarding Support:</b> Book a complimentary 30-minute onboarding call: <a href="' + BOOK_URL + '" target="_blank" rel="noopener">Book a call</a>');
-  rows.push('✉️ <b>Need help?</b> Email us at <a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>");
-  return {
-    html: "Here's how to get started with the <b>" + escapeHtml(label) + "</b> integration:<br><br>" +
-      rows.join("<br>") +
-      "<br><br>Is there anything specific about the setup you need help with? 😊",
-    chips: CFG.chips
-  };
+  item("Need hands-on help?", 'Book a complimentary 30-minute onboarding call: ' + extLink(BOOK_URL, "Book a demo") + ' or email us at <a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>");
+  var html = "Here's how you can get started with the " + escapeHtml(label) + " integration:<br><br>" +
+    items.join("<br>") +
+    "<br><br>Is there anything else I can help you with? 🙂";
+  if (info.videoId) {
+    var yt = "https://www.youtube.com/watch?v=" + escapeHtml(info.videoId);
+    html += '<a class="cfb-yt" href="' + yt + '" target="_blank" rel="noopener">' +
+      '<img src="https://img.youtube.com/vi/' + escapeHtml(info.videoId) + '/hqdefault.jpg" alt="' + escapeHtml(info.videoTitle || "Video guide") + '">' +
+      "<span>" + escapeHtml(info.videoTitle || "Watch the video guide") + "</span></a>";
+  }
+  return { html: html, chips: (typeof CFG !== "undefined" && CFG.chips) || [] };
 }
 
 /* ---------- tiny intent layer (runs before KB search) ---------- */
@@ -507,8 +517,8 @@ function intentReply(q) {
   if (/\b(bye|goodbye|see you|good night)\b/.test(s))
     return { text: "Goodbye for now! 👋 If you need anything later, I'll be right here.", chips: [] };
   if (/\b(book|demo|consultation|consult|call|talk to (a |someone|human)|human|agent|support|contact|email|phone)\b/.test(s))
-    return { html: "You can <b>book a free consultation</b> with our team here:<br><br>👉 <a href=\"" + BOOK_URL + "\" target=\"_blank\" rel=\"noopener\">Book a free consultation</a><br>Or reach us via the <a href=\"" + CONTACT_URL + "\" target=\"_blank\" rel=\"noopener\">contact page</a>.",
-             text: "You can book a free consultation with our team.", chips: ["What services do you offer?"] };
+    return { html: "To talk to our marketplace team at Cloudify, you can <a href=\"" + BOOK_URL + "\" target=\"_blank\" rel=\"noopener\">schedule a meeting with us</a>. A calendar invitation will be shared with you.<br><br>Alternatively, feel free to reach out to us at <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> for any questions or assistance. 😀",
+             text: "To talk to our marketplace team at Cloudify, you can schedule a meeting with us.", chips: [] };
   if (/\b(who are you|your name|what are you)\b/.test(s))
     return { text: "I'm " + CFG.name + ", the Cloudify docs assistant. I answer from our documentation — ask me about installing, configuring, or troubleshooting an integration!", chips: CFG.chips };
   return null;
@@ -534,6 +544,9 @@ var CSS = [
 ".cfb-user{background:VAR_COLOR;color:#fff;border-bottom-right-radius:4px;align-self:flex-end}",
 ".cfb-msg a{color:VAR_COLOR;font-weight:600}",
 ".cfb-src{display:block;margin-top:8px;padding-top:8px;border-top:1px solid #eef0f3;font-size:12px}",
+".cfb-yt{display:block;margin-top:10px;border:1px solid #eef0f3;border-radius:12px;overflow:hidden;text-decoration:none}",
+".cfb-yt img{display:block;width:100%;height:auto}",
+".cfb-yt span{display:block;padding:8px 12px;font-size:13px;font-weight:600}",
 ".cfb-typing{display:inline-flex;gap:5px;padding:12px 16px}",
 ".cfb-typing span{width:8px;height:8px;border-radius:50%;background:#9ca3af;animation:cfb-b 1.2s infinite}",
 ".cfb-typing span:nth-child(2){animation-delay:.15s}.cfb-typing span:nth-child(3){animation-delay:.3s}",
@@ -666,12 +679,35 @@ function srcLink(chunk) {
   return '<span class="cfb-src">📄 Source: <a href="' + escapeHtml(chunk.url) + '" target="_blank" rel="noopener">' + title + "</a></span>";
 }
 
+/* ---------- Lyro-style closings & support escalation ---------- */
+function isTrouble(q) {
+  return /\b(issue|issues|error|errors|problem|problems|facing|not working|isn'?t working|failed|fails|failure|trouble|stuck|broken)\b/i.test(q || "");
+}
+function supportLine(q) {
+  var mail = '<a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>";
+  if (isTrouble(q)) {
+    return 'Need more help? <a href="' + BOOK_URL + '" target="_blank" rel="noopener">Book a support call</a> or reach us at ' + mail + ".";
+  }
+  return "Need more help? Reach us at " + mail + ".";
+}
+function closingFor(q) {
+  if (isTrouble(q)) {
+    return "Could you share more details about the specific error or issue you're encountering? I can try to help further, or connect you with our team. 🙂";
+  }
+  return "Is there anything else I can help you with? 🙂";
+}
+// bold the lead phrase of a step when it has a natural "Lead: rest" shape
+function stepLead(s) {
+  var m = /^(.{4,60}?)(:\s+| – | - )(.{10,})$/.exec(s);
+  if (m) return "<b>" + escapeHtml(m[1]) + "</b> – " + escapeHtml(m[3]);
+  return escapeHtml(s);
+}
 /* ---------- Lyro-style rich answer (deterministic) ----------
  * Builds a structured answer from the page-ordered steps: opening line,
  * numbered steps, guide sentence, source link, support email, follow-up.
  * Used as the extractive fallback AND as the base the AI rewrite improves
  * on — so answers stay rich even when the AI proxy is unreachable. */
-function richAnswerHtml(d) {
+function richAnswerHtml(d, q) {
   var primary = d.primary.chunk;
   var title = primary.title || primary.url;
   var steps = [], seen = {};
@@ -683,17 +719,18 @@ function richAnswerHtml(d) {
     steps.push(t);
   });
   var html = "";
+  var trouble = isTrouble(q);
   if (steps.length >= 2) {
-    html = "Here are the steps for <b>" + escapeHtml(title) + "</b>:<br><br><ol>" +
-      steps.map(function (s) { return "<li>" + escapeHtml(s) + "</li>"; }).join("") +
+    html = (trouble ? "Sorry to hear you're facing issues! Here are the steps for " : "Here are the steps for ") +
+      "<b>" + escapeHtml(title) + "</b>:<br><br><ol>" +
+      steps.map(function (s) { return "<li>" + stepLead(s) + "</li>"; }).join("") +
       "</ol><br>";
   } else if (steps.length === 1) {
-    html = escapeHtml(steps[0]) + "<br><br>";
+    html = (trouble ? "Sorry to hear you're facing issues! " : "") + escapeHtml(steps[0]) + "<br><br>";
   }
-  html += "For detailed guidance, you can review our guide for " + escapeHtml(title) + ".<br>" +
-    srcLink(primary) +
-    '<br><br>Need more help? Reach us at <a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>." +
-    "<br><br>Is there anything specific you need help with? 😊";
+  html += srcLink(primary) +
+    "<br><br>" + supportLine(q) +
+    "<br><br>" + closingFor(q);
   return html;
 }
 
@@ -735,7 +772,7 @@ function answerFromKB(q, comboFilter) {
   if (combo && COMBO_CARDS[combo] && isGettingStarted(q)) {
     return gettingStartedCard(combo);
   }
-  var htmlOut = richAnswerHtml(d);
+  var htmlOut = richAnswerHtml(d, q);
   // generic follow-up chips appear only after the first answer — never repeated
   var chips = followupsShown ? [] : ["How do I connect my Xero account?", "How do I cancel my subscription?"];
   followupsShown = true;
@@ -788,9 +825,12 @@ function rewriteAnswer(a) {
     return res.json();
   }).then(function (data) {
     if (!data || !data.html) throw new Error("empty");
+    // ticket-only replies stay bare, exactly as the visitor should see them
+    if (/support ticket/i.test(data.html)) { finish(sanitizeHtml(data.html)); return; }
     var src = { url: a.rewrite.primaryUrl, title: a.rewrite.primaryTitle };
     var htmlOut = sanitizeHtml(data.html) + "<br>" + srcLink(src) +
-      '<br><br>Need more help? Reach us at <a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>.";
+      "<br><br>" + supportLine(a.rewrite.question) +
+      "<br><br>" + closingFor(a.rewrite.question);
     finish(htmlOut);
   }).catch(function () { fallback(); });
   if (!ctrl) { /* no AbortController: rely on fetch rejection */ }
