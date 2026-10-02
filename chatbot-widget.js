@@ -229,57 +229,34 @@ function combosForApp(combos, app) {
   out.sort(function (a, b) { return combos[b] - combos[a]; });
   return out;
 }
-// Pure decision: given ranked good matches, answer directly, ask which combo,
-// or fall back. Never returns a "related" source from a different combo.
-function decideAnswer(results, qnorm, combos) {
-  if (!results.length) return { type: "fallback" };
-  var topCb = comboOf(results[0].chunk.url);
-  if (topCb) {
-    var byCombo = {}, order = [], i, r, cb;
-    for (i = 0; i < results.length; i++) {
-      r = results[i]; cb = comboOf(r.chunk.url);
-      if (cb && !byCombo[cb]) { byCombo[cb] = r.score; order.push(cb); }
-    }
-    if (order.length >= 2 && byCombo[order[1]] >= byCombo[order[0]] * 0.7) {
-      // ambiguous across integrations — but only ask when the visitor named an
-      // app; otherwise there is no signal to disambiguate on, so answer directly
-      var named = namedApps(qnorm);
-      if (named.length && combos) {
-        // ...unless the visitor already named one combo's app ("Xero in Pipedrive")
-        var runner = order[1], namedIt = false;
-        for (i = 0; i < named.length; i++) {
-          if (comboHasApp(topCb, named[i]) && !comboHasApp(runner, named[i])) {
-            namedIt = true; break;
-          }
-        }
-        if (!namedIt) {
-          // pivot = the named app the ambiguous combos share ("xero")
-          var pivot = null, pivotCount = 0, a, c;
-          for (i = 0; i < named.length; i++) {
-            c = 0;
-            for (a = 0; a < order.length; a++) {
-              if (comboHasApp(order[a], named[i])) c++;
-            }
-            if (c > pivotCount) { pivotCount = c; pivot = named[i]; }
-          }
-          if (pivot && pivotCount >= 2) {
-            // offer EVERY combo for that app — search hits first, then the rest
-            var seen = {}, labels = [], options = {};
-            var add = function (key) {
-              if (seen[key]) return;
-              seen[key] = 1;
-              var label = comboLabel(key);
-              labels.push(label);
-              options[label] = key;
-            };
-            order.forEach(function (key) { if (comboHasApp(key, pivot)) add(key); });
-            combosForApp(combos, pivot).forEach(add);
-            return { type: "disambiguate", labels: labels, options: options };
-          }
-        }
-      }
-    }
+// Pure decision: every question goes combo-first. Answer directly only when the
+// visitor already named one combo ("Xero in Pipedrive"); otherwise ask which
+// integration they mean - with all combos for the named app, or the most
+// popular integrations when no app was named. Never returns a "related"
+// source from a different combo.
+function comboOrder(results) {
+  var byCombo = {}, order = [], i, r, cb;
+  for (i = 0; i < results.length; i++) {
+    r = results[i]; cb = comboOf(r.chunk.url);
+    if (cb && !(cb in byCombo)) { byCombo[cb] = r.score; order.push(cb); }
   }
+  return order;
+}
+function topCombos(combos, n) {
+  return Object.keys(combos).sort(function (a, b) { return combos[b] - combos[a]; }).slice(0, n);
+}
+function comboChips(keys) {
+  var seen = {}, labels = [], options = {};
+  keys.forEach(function (key) {
+    if (seen[key]) return;
+    seen[key] = 1;
+    var label = comboLabel(key);
+    labels.push(label);
+    options[label] = key;
+  });
+  return { labels: labels, options: options };
+}
+function directAnswer(results, topCb) {
   var related = null;
   if (results[1] && results[1].score >= results[0].score * 0.75 &&
       comboOf(results[1].chunk.url) === topCb &&
@@ -288,13 +265,70 @@ function decideAnswer(results, qnorm, combos) {
   }
   return { type: "answer", primary: results[0], related: related };
 }
+function decideAnswer(results, qnorm, combos, forceDirect) {
+  if (!results.length) return { type: "fallback" };
+  var topCb = comboOf(results[0].chunk.url);
+  if (!forceDirect) {
+    var named = namedApps(qnorm), i, a;
+    if (named.length && topCb) {
+      var order = comboOrder(results);
+      var runner = order.length > 1 ? order[1] : null;
+      // visitor distinctively named one combo -> answer it directly
+      var distinctive = false;
+      for (i = 0; i < named.length; i++) {
+        if (comboHasApp(topCb, named[i]) && (!runner || !comboHasApp(runner, named[i]))) {
+          distinctive = true; break;
+        }
+      }
+      if (!distinctive && combos && order.length >= 2) {
+        var best = {};
+        order.forEach(function (k) { best[k] = 0; });
+        results.forEach(function (r) {
+          var cbx = comboOf(r.chunk.url);
+          if (cbx && order.indexOf(cbx) !== -1 && !best[cbx]) best[cbx] = r.score;
+        });
+        if (best[order[1]] >= best[order[0]] * 0.7) {
+          // ambiguous: pivot = the named app the candidate combos share
+          var pivot = null, pivotCount = 0, c;
+          for (i = 0; i < named.length; i++) {
+            c = 0;
+            for (a = 0; a < order.length; a++) {
+              if (comboHasApp(order[a], named[i])) c++;
+            }
+            if (c > pivotCount) { pivotCount = c; pivot = named[i]; }
+          }
+          if (pivot && pivotCount >= 2) {
+            // offer EVERY combo for that app - search hits first, then the rest
+            var keys = [];
+            order.forEach(function (key) { if (comboHasApp(key, pivot)) keys.push(key); });
+            combosForApp(combos, pivot).forEach(function (key) {
+              if (keys.indexOf(key) === -1) keys.push(key);
+            });
+            var chips = comboChips(keys);
+            return { type: "disambiguate", labels: chips.labels, options: chips.options,
+              html: "Good question - but the setup steps are different for each integration. 🙂<br><br><b>Which " +
+                prettySeg(pivot) + " integration are you setting up?</b>" };
+          }
+        }
+      }
+      // distinctive, or named but not ambiguous -> answer the top combo directly
+    } else if (combos) {
+      // no app named: ask with the most popular integrations
+      var chips2 = comboChips(topCombos(combos, 6));
+      return { type: "disambiguate", labels: chips2.labels, options: chips2.options,
+        html: "Sure - I\u2019ll point you to the right guide. 🙂<br><br><b>Which integration is this about?</b>" };
+    }
+  }
+  return directAnswer(results, topCb);
+}
 
 function isGettingStarted(q) {
   return /\b(getting started|get started|how do i (start|begin|install|set ?up)|how to (start|begin|install|set ?up|get started)|install (the|this) integration)\b/i.test(q || "");
 }
 var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, expandQuery: expandQuery, goodMatch: goodMatch,
   comboOf: comboOf, comboLabel: comboLabel, namedApps: namedApps, comboBoost: comboBoost, decideAnswer: decideAnswer,
-  combosForApp: combosForApp, comboHasApp: comboHasApp, isGettingStarted: isGettingStarted };
+  combosForApp: combosForApp, comboHasApp: comboHasApp, isGettingStarted: isGettingStarted,
+  topCombos: topCombos, comboOrder: comboOrder };
 if (typeof module !== "undefined" && module.exports) module.exports = ChatEngine;
 
 /* ---------------- widget (browser only) ---------------- */
@@ -565,7 +599,8 @@ function answerFromKB(q, comboFilter) {
     }
   }
   var results = search(index, expandQuery(q), 8).filter(goodMatch);
-  var d = decideAnswer(results, qnorm, kbIndex.combos);
+  // once the visitor picked an integration, never ask again - answer it directly
+  var d = decideAnswer(results, qnorm, kbIndex.combos, !!comboFilter);
   if (d.type === "fallback") {
     pendingCombo = null;
     return {
@@ -574,12 +609,10 @@ function answerFromKB(q, comboFilter) {
     };
   }
   if (d.type === "disambiguate") {
-    // ambiguous across integrations: ask which combo's setup guide they need
+    // ask which integration they mean; the question is kept so the picked
+    // combo answers it
     pendingCombo = { query: q, options: d.options };
-    return {
-      html: "Good question — but the setup steps are different for each integration. 🙂<br><br><b>Which integration are you setting up?</b>",
-      chips: d.labels
-    };
+    return { html: d.html, chips: d.labels };
   }
   pendingCombo = null;
   // rich "getting started" card for installation questions about an integration
