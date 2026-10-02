@@ -681,7 +681,7 @@ function answerFromKB(q, comboFilter) {
     return gettingStartedCard(combo);
   }
   var ctxText = d.context.map(function (c) { return cleanText(c.text); }).join(" ");
-  var htmlOut = "Here's what I found:" + "<br><br>" + trimText(ctxText, 650) + srcLink(d.primary.chunk) +
+  var htmlOut = trimText(ctxText, 650) + srcLink(d.primary.chunk) +
     '<br><br>Need more help? Reach us at <a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>.";
   var chips = ["How do I connect my Xero account?", "How do I cancel my subscription?"];
   return {
@@ -720,7 +720,7 @@ function rewriteAnswer(a) {
     addChips(a.chips);
   }
   function fallback() { finish(a.html); }
-  if (ctrl) { timer = setTimeout(function () { try { ctrl.abort(); } catch (e) {} fallback(); }, 15000); }
+  if (ctrl) { timer = setTimeout(function () { try { ctrl.abort(); } catch (e) {} fallback(); }, 45000); }
   var payload = {
     question: a.rewrite.question,
     combo: a.rewrite.combo,
