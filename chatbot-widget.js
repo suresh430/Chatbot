@@ -60,19 +60,57 @@ function buildIndex(chunks) {
     }
     return { v: v, norm: Math.sqrt(norm) || 1 };
   });
+  // stable page-order positions (survive combo sub-index rebuilds)
+  chunks.forEach(function (c, idx) { if (c._pos === undefined) c._pos = idx; });
   // combo catalog: "pipedrive/xero" -> chunk count (for "show all combos" disambiguation)
   var combos = {};
   chunks.forEach(function (c) {
     var k = comboOf(c.url);
     if (k) combos[k] = (combos[k] || 0) + 1;
   });
-  return { chunks: chunks, idf: idf, vecs: vecs, N: N, combos: combos };
+  return { chunks: chunks, idf: idf, df: df, vecs: vecs, N: N, combos: combos };
 }
 
+// edit distance with early exit (for typo-tolerant search)
+function editDistance(a, b, maxEd) {
+  var m = a.length, n = b.length, i, j, cost, rowMin, tmp;
+  if (Math.abs(m - n) > maxEd) return maxEd + 1;
+  var prev = [], cur = [];
+  for (j = 0; j <= n; j++) prev[j] = j;
+  for (i = 1; i <= m; i++) {
+    cur[0] = i; rowMin = i;
+    for (j = 1; j <= n; j++) {
+      cost = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > maxEd) return maxEd + 1;
+    tmp = prev; prev = cur; cur = tmp;
+  }
+  return prev[n];
+}
+// fix a misspelled query word ("reccuring" -> "recurring") using the KB vocabulary
+function correctSpelling(index, tok) {
+  if (index.idf[tok] || tok.length < 4) return tok;
+  var maxEd = tok.length >= 7 ? 2 : 1;
+  var terms = Object.keys(index.idf), best = null, bestEd = maxEd + 1, bestDf = -1, i, t, ed, df;
+  for (i = 0; i < terms.length; i++) {
+    t = terms[i];
+    if (t.length < 4 || Math.abs(t.length - tok.length) > maxEd) continue;
+    if (t.charAt(0) !== tok.charAt(0)) continue;
+    ed = editDistance(tok, t, maxEd);
+    if (ed <= maxEd) {
+      df = (index.df && index.df[t]) || 0;
+      if (ed < bestEd || (ed === bestEd && df > bestDf)) { best = t; bestEd = ed; bestDf = df; }
+    }
+  }
+  return best || tok;
+}
 function search(index, query, topK) {
   topK = topK || 3;
   var qtoks = tokenize(query), i, t;
   if (!qtoks.length) return [];
+  qtoks = qtoks.map(function (tok) { return correctSpelling(index, tok); });
   var qn = query.toLowerCase().replace(/-/g, " "); // normalized for combo matching
   var qtf = {}, qv = {}, qnorm = 0, w;
   qtoks.forEach(function (x) { qtf[x] = (qtf[x] || 0) + 1; });
@@ -257,13 +295,14 @@ function comboChips(keys) {
   return { labels: labels, options: options };
 }
 function directAnswer(results, topCb) {
-  var related = null;
-  if (results[1] && results[1].score >= results[0].score * 0.75 &&
-      comboOf(results[1].chunk.url) === topCb &&
-      results[1].chunk.url !== results[0].chunk.url) {
-    related = results[1];
+  var primary = results[0], i;
+  // fuller, coherent answers: up to 3 top chunks from the primary's page, in page order
+  var pageChunks = [];
+  for (i = 0; i < results.length && pageChunks.length < 3; i++) {
+    if (results[i].chunk.url === primary.chunk.url) pageChunks.push(results[i].chunk);
   }
-  return { type: "answer", primary: results[0], related: related };
+  pageChunks.sort(function (a, b) { return (a._pos || 0) - (b._pos || 0); });
+  return { type: "answer", primary: primary, context: pageChunks };
 }
 function decideAnswer(results, qnorm, combos, forceDirect) {
   if (!results.length) return { type: "fallback" };
@@ -328,7 +367,8 @@ function isGettingStarted(q) {
 var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, expandQuery: expandQuery, goodMatch: goodMatch,
   comboOf: comboOf, comboLabel: comboLabel, namedApps: namedApps, comboBoost: comboBoost, decideAnswer: decideAnswer,
   combosForApp: combosForApp, comboHasApp: comboHasApp, isGettingStarted: isGettingStarted,
-  topCombos: topCombos, comboOrder: comboOrder };
+  topCombos: topCombos, comboOrder: comboOrder,
+  correctSpelling: correctSpelling, cleanText: cleanText, editDistance: editDistance };
 if (typeof module !== "undefined" && module.exports) module.exports = ChatEngine;
 
 /* ---------------- widget (browser only) ---------------- */
@@ -573,6 +613,16 @@ function botSay(html, chips, delay) {
     addChips(chips);
   }, delay || 700);
 }
+// strip markdown debris the KB build may have left behind (***, ___, \', ...)
+function cleanText(t) {
+  return (t || "")
+    .replace(/\*{3,}/g, " ")
+    .replace(/_{3,}/g, " ")
+    .replace(/(^|\s)-{3,}(\s|$)/g, " ")
+    .replace(/\\'/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 function trimText(t, n) {
   t = (t || "").replace(/\s+/g, " ").trim();
   if (t.length <= n) return escapeHtml(t);
@@ -598,7 +648,7 @@ function answerFromKB(q, comboFilter) {
       };
     }
   }
-  var results = search(index, expandQuery(q), 8).filter(goodMatch);
+  var results = search(index, expandQuery(q), 15).filter(goodMatch);
   // once the visitor picked an integration, never ask again - answer it directly
   var d = decideAnswer(results, qnorm, kbIndex.combos, !!comboFilter);
   if (d.type === "fallback") {
@@ -622,10 +672,9 @@ function answerFromKB(q, comboFilter) {
   if (combo && COMBO_CARDS[combo] && isGettingStarted(q)) {
     return gettingStartedCard(combo);
   }
-  var htmlOut = "Here's what I found:" + "<br><br>" + trimText(d.primary.chunk.text, 420) + srcLink(d.primary.chunk);
-  if (d.related) {
-    htmlOut += "<br><br>Related: " + trimText(d.related.chunk.text, 280) + srcLink(d.related.chunk);
-  }
+  var ctxText = d.context.map(function (c) { return cleanText(c.text); }).join(" ");
+  var htmlOut = "Here's what I found:" + "<br><br>" + trimText(ctxText, 650) + srcLink(d.primary.chunk) +
+    '<br><br>Need more help? Reach us at <a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>.";
   var chips = ["How do I connect my Xero account?", "How do I cancel my subscription?"];
   return { html: htmlOut, chips: chips };
 }
