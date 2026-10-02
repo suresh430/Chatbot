@@ -459,7 +459,7 @@ var CFG = {
   color:    userCfg.color    || dataAttr("color", "#1d4ed8"),
   position: userCfg.position || dataAttr("position", "right"), // right | left
   welcome:  userCfg.welcome  || null,
-  chips:    userCfg.chips    || ["How do I connect my Xero account?", "How do I create an invoice from HubSpot?", "How do I cancel my subscription?"]
+  chips:    userCfg.chips    || []
 };
 
 // shortest installation/getting-started docs URL for a combo
