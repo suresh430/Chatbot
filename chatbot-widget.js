@@ -522,6 +522,10 @@ var CSS = [
 ".cfb-foot input{flex:1;border:1.5px solid #e5e7eb;border-radius:999px;padding:10px 16px;font-size:14px;outline:none}",
 ".cfb-foot input:focus{border-color:VAR_COLOR}",
 ".cfb-foot button{border:none;background:VAR_COLOR;color:#fff;border-radius:50%;width:42px;height:42px;cursor:pointer;font-size:17px;flex-shrink:0}",
+".cfb-foot .cfb-attach{background:none;font-size:20px;width:36px;height:42px;filter:grayscale(1);opacity:.55;padding:0}",
+".cfb-foot .cfb-attach:hover{opacity:1;filter:none}",
+".cfb-attachment img{max-width:200px;max-height:140px;border-radius:8px;display:block}",
+".cfb-attachchip{background:rgba(255,255,255,.22);border-radius:8px;padding:6px 10px;font-size:13px;display:inline-block}",
 ".cfb-foot button:disabled{opacity:.5;cursor:default}"
 ].join("\n").replace(/VAR_COLOR/g, CFG.color);
 
@@ -549,7 +553,8 @@ var panel = el(
       '<button aria-label="Close chat">✕</button>' +
     '</div>' +
     '<div class="cfb-body"></div>' +
-    '<div class="cfb-foot"><input type="text" placeholder="Ask a question…" aria-label="Ask a question"><button aria-label="Send">➤</button></div>' +
+    '<div class="cfb-foot"><button class="cfb-attach" aria-label="Attach a file">📎</button><input type="text" placeholder="Ask a question…" aria-label="Ask a question"><button class="cfb-send" aria-label="Send">➤</button></div>' +
+    '<input type="file" class="cfb-fileinput" accept="image/*,.pdf,.doc,.docx,.txt,.csv,.xls,.xlsx" style="display:none" aria-hidden="true">' +
   '</div>');
 
 document.body.appendChild(launcher);
@@ -557,7 +562,9 @@ document.body.appendChild(panel);
 
 var body = panel.querySelector(".cfb-body");
 var input = panel.querySelector(".cfb-foot input");
-var sendBtn = panel.querySelector(".cfb-foot button");
+var sendBtn = panel.querySelector(".cfb-send");
+var attachBtn = panel.querySelector(".cfb-attach");
+var fileInput = panel.querySelector(".cfb-fileinput");
 var closeBtn = panel.querySelector(".cfb-head button");
 
 function escapeHtml(s) {
@@ -738,6 +745,29 @@ function sayAnswer(a) {
   if (a.rewrite && CFG.rewriteUrl) { rewriteAnswer(a); return; }
   botSay(a.html, a.chips);
 }
+
+/* ---------- file attachments ----------
+ * Visitors can attach screenshots/files via the paperclip button. Files stay
+ * on their device (nothing is uploaded); the bot is honest that it can't view
+ * them and guides the visitor to describe the issue or email support. */
+attachBtn.onclick = function () { fileInput.click(); };
+fileInput.onchange = function () {
+  var f = fileInput.files && fileInput.files[0];
+  fileInput.value = "";
+  if (!f) return;
+  if (f.size > 10 * 1024 * 1024) {
+    botSay("That file is over 10MB — please try a smaller one. 📎", []);
+    return;
+  }
+  var isImg = (f.type || "").indexOf("image/") === 0;
+  var url = URL.createObjectURL(f);
+  var inner = isImg
+    ? '<div class="cfb-attachment"><img src="' + url + '" alt="Attached screenshot"></div><div style="font-size:12px;opacity:.75;margin-top:4px">' + escapeHtml(f.name) + "</div>"
+    : '<span class="cfb-attachchip">📄 ' + escapeHtml(f.name) + "</span>";
+  addMsg("cfb-user", inner);
+  botSay("Thanks for sharing <b>" + escapeHtml(f.name) + "</b>! I can't view images or files directly, and nothing is uploaded — the file stays on your device. Could you describe what you're seeing in words? I'll do my best to help. If our team needs to see the file, please email it to <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a>.",
+    ["How do I connect my Xero account?", "How do I cancel my subscription?"]);
+};
 
 function handleUser(text) {
   text = (text || "").trim();
