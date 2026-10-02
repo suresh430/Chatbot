@@ -289,9 +289,12 @@ function decideAnswer(results, qnorm, combos) {
   return { type: "answer", primary: results[0], related: related };
 }
 
+function isGettingStarted(q) {
+  return /\b(getting started|get started|how do i (start|begin|install|set ?up)|how to (start|begin|install|set ?up|get started)|install (the|this) integration)\b/i.test(q || "");
+}
 var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, expandQuery: expandQuery, goodMatch: goodMatch,
   comboOf: comboOf, comboLabel: comboLabel, namedApps: namedApps, comboBoost: comboBoost, decideAnswer: decideAnswer,
-  combosForApp: combosForApp, comboHasApp: comboHasApp };
+  combosForApp: combosForApp, comboHasApp: comboHasApp, isGettingStarted: isGettingStarted };
 if (typeof module !== "undefined" && module.exports) module.exports = ChatEngine;
 
 /* ---------------- widget (browser only) ---------------- */
@@ -313,6 +316,88 @@ var CFG = {
 };
 var CONTACT_URL = "https://cloudify.biz/contact";
 var BOOK_URL = "https://meetings.hubspot.com/cloudify/app-assistance";
+var SUPPORT_EMAIL = "support@cloudify.biz";
+
+/* ---------- per-integration "getting started" cards ----------
+ * Curated links for the rich answers (marketplace listing, overview video,
+ * trial). Setup Guide is derived from the docs at runtime; booking + support
+ * email are global. Combos without curated links still get Setup Guide +
+ * booking + support rows. */
+var COMBO_CARDS = {
+  "hubspot/xero": {
+    app: "HubSpot Marketplace",
+    appUrl: "https://ecosystem.hubspot.com/marketplace/apps/xero-sync-3387409",
+    videoId: "JypOwjEhAp0",
+    trialText: "Includes 30 invoice syncs over 30 days",
+    trialUrl: "https://app.hubspot.com/marketplace/23395533/listing/xero-sync-3387409"
+  },
+  "pipedrive/xero": {
+    app: "Pipedrive Marketplace",
+    appUrl: "https://www.pipedrive.com/en/marketplace/app/xero/b217602d14d86f39",
+    videoId: "3XKwrCnaEJE",
+    trialText: "Free trial with 15 syncs, no credit card required",
+    trialUrl: ""
+  },
+  "shopify/xero": {
+    app: "Shopify App Store",
+    appUrl: "https://apps.shopify.com/xero-4",
+    videoId: "",
+    trialText: "",
+    trialUrl: ""
+  },
+  "woocommerce/woocommerce-xero": {
+    app: "",
+    appUrl: "",
+    videoId: "",
+    trialText: "",
+    trialUrl: "",
+    setupGuide: "https://docs.cloudify.biz/woocommerce-xero/getting-started/overview"
+  }
+};
+// shortest installation/getting-started docs URL for a combo
+function setupGuideUrl(combo) {
+  var curated = COMBO_CARDS[combo] && COMBO_CARDS[combo].setupGuide;
+  if (curated) return curated;
+  var best = null;
+  kbIndex.chunks.forEach(function (c) {
+    if (comboOf(c.url) !== combo) return;
+    if (c.url.indexOf("/installation/") === -1 && c.url.indexOf("/getting-started/") === -1) return;
+    if (!best || c.url.length < best.length) best = c.url;
+  });
+  return best;
+}
+function gettingStartedCard(combo) {
+  var info = COMBO_CARDS[combo] || {};
+  var guide = setupGuideUrl(combo);
+  var label = comboLabel(combo);
+  var rows = [];
+  if (guide) {
+    rows.push('📖 <b>Setup Guide:</b> Follow the step-by-step instructions here: <a href="' + escapeHtml(guide) + '" target="_blank" rel="noopener">Setup Guide</a>');
+  }
+  if (info.appUrl) {
+    rows.push('🛒 <b>Get the App:</b> Available on the ' + escapeHtml(info.app || "marketplace") + ': <a href="' + escapeHtml(info.appUrl) + '" target="_blank" rel="noopener">Get the app</a>');
+  }
+  if (info.videoId) {
+    rows.push('🎥 <b>Video Guide:</b> Watch an overview: <a href="https://www.youtube.com/watch?v=' + escapeHtml(info.videoId) + '" target="_blank" rel="noopener">YouTube Video</a>');
+  }
+  if (info.trialText) {
+    var trial = '🆓 <b>Free Trial:</b> ' + escapeHtml(info.trialText);
+    if (info.trialUrl) {
+      trial += ': <a href="' + escapeHtml(info.trialUrl) + '" target="_blank" rel="noopener">Start free trial</a>';
+    } else {
+      trial += ".";
+    }
+    rows.push(trial);
+  }
+  rows.push('📅 <b>Onboarding Support:</b> Book a complimentary 30-minute onboarding call: <a href="' + BOOK_URL + '" target="_blank" rel="noopener">Book a call</a>');
+  rows.push('✉️ <b>Need help?</b> Email us at <a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>");
+  return {
+    html: "Here's how to get started with the <b>" + escapeHtml(label) + "</b> integration:<br><br>" +
+      rows.join("<br>") +
+      "<br><br>Is there anything specific about the setup you need help with? 😊",
+    chips: CFG.chips
+  };
+}
 
 /* ---------- tiny intent layer (runs before KB search) ---------- */
 function intentReply(q) {
@@ -497,6 +582,13 @@ function answerFromKB(q, comboFilter) {
     };
   }
   pendingCombo = null;
+  // rich "getting started" card for installation questions about an integration
+  // with verified links (marketplace, video, trial); other combos keep the
+  // specific docs answer
+  var combo = comboFilter || comboOf(d.primary.chunk.url);
+  if (combo && COMBO_CARDS[combo] && isGettingStarted(q)) {
+    return gettingStartedCard(combo);
+  }
   var htmlOut = "Here's what I found:" + "<br><br>" + trimText(d.primary.chunk.text, 420) + srcLink(d.primary.chunk);
   if (d.related) {
     htmlOut += "<br><br>Related: " + trimText(d.related.chunk.text, 280) + srcLink(d.related.chunk);
