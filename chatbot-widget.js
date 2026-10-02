@@ -392,7 +392,7 @@ var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, e
   combosForApp: combosForApp, comboHasApp: comboHasApp, isGettingStarted: isGettingStarted,
   gettingStartedCard: gettingStartedCard, richAnswerHtml: richAnswerHtml,
   closingFor: closingFor, supportLine: supportLine, isTrouble: isTrouble,
-  memoryFilter: memoryFilter, answerFromKB: answerFromKB,
+  memoryFilter: memoryFilter, answerFromKB: answerFromKB, isVagueQuestion: isVagueQuestion,
   getActiveCombo: function () { return activeCombo; },
   setActiveCombo: function (c) { activeCombo = c; },
   setKbIndex: function (idx) { kbIndex = idx; },
@@ -400,6 +400,7 @@ var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, e
   correctSpelling: correctSpelling, cleanText: cleanText, editDistance: editDistance };
 if (typeof module !== "undefined" && module.exports) module.exports = ChatEngine;
 var comboIndexCache = {}; // lazily built per-combo search indexes
+var VAGUE_STOPWORDS = {a:1, an:1, the:1, and:1, or:1, can:1, could:1, you:1, your:1, me:1, my:1, i:1, we:1, please:1, show:1, tell:1, give:1, get:1, want:1, need:1, help:1, how:1, do:1, does:1, is:1, are:1, what:1, which:1, with:1, for:1, to:1, of:1, in:1, on:1, it:1, this:1, that:1, be:1, have:1, has:1, will:1, would:1, should:1, am:1, as:1, by:1, from:1, some:1, any:1, more:1, about:1};
 
 var CONTACT_URL = "https://cloudify.biz/contact";
 var BOOK_URL = "https://meetings.hubspot.com/cloudify/app-assistance";
@@ -729,6 +730,22 @@ function richAnswerHtml(d, q) {
   return html;
 }
 
+/* Vague-question detection: after stopwords and app names are removed, fewer than
+ * two meaningful tokens remain (e.g. "Can you show me steps" -> just "steps").
+ * Used so a vague follow-up in an established combo context gets a clarifying
+ * question instead of a ticket message or another "which integration?" ask. */
+function isVagueQuestion(q) {
+  var qnorm = q.toLowerCase().replace(/-/g, " ");
+  var apps = namedApps(qnorm), toks = tokenize(q.toLowerCase()), i, t, meaningful = 0;
+  for (i = 0; i < toks.length; i++) {
+    t = toks[i];
+    if (VAGUE_STOPWORDS[t]) continue;
+    if (apps.indexOf(t) !== -1) continue;
+    meaningful++;
+  }
+  return meaningful < 2;
+}
+
 /* Once the visitor has settled on an integration (named it distinctively or picked
  * a chip), remember it for the rest of the conversation so follow-up questions
  * don't get asked "which app?" again. A question naming an app outside the
@@ -760,26 +777,28 @@ function answerFromKB(q, comboFilter, isMemory) {
   if (isMemory && comboFilter) {
     // The visitor is continuing in the remembered integration's context: restore the
     // combo's app names for retrieval, so "Facing issue while connecting" is read as
-    // connecting *HubSpot with Xero* here. Guard: only when the question matches
-    // something on its own — otherwise nonsense would get force-answered on the
-    // combo terms alone.
+    // connecting *HubSpot with Xero* here. Guard: only when the question has a
+    // meaningful match on its own (score >= 0.25) — otherwise the combo terms alone
+    // would force weak matches (e.g. "show me steps" matching an errors page).
     var probe = search(index, expandQuery(q), 3);
-    if (probe.length > 0 && probe[0].score > 0) {
+    if (probe.length > 0 && probe[0].score >= 0.25) {
       query = q + " " + comboFilter.replace(/\//g, " ");
-    } else {
-      return answerFromKB(q, null, false);
     }
+    // else: proceed unaugmented; falls through to the fallback handling below
   }
   var results = search(index, expandQuery(query), 15).filter(goodMatch);
   // once the visitor picked an integration, never ask again - answer it directly
   var d = decideAnswer(results, qnorm, kbIndex.combos, !!comboFilter, index);
-  if (d.type === "fallback" && isMemory) {
-    // the remembered integration has nothing on this question — answer it fresh
-    // (normal flow) instead of dead-ending with a ticket message
-    return answerFromKB(q, null, false);
-  }
   if (d.type === "fallback") {
     pendingCombo = null;
+    if (isMemory && isVagueQuestion(q)) {
+      // In an established combo context, don't re-ask "which integration?" and don't
+      // ticket a vague question — ask what they need. Memory stays set.
+      return {
+        html: "I want to point you to the right place — could you share a bit more detail about what you're trying to do? 🙂",
+        chips: []
+      };
+    }
     return {
       html: "Please <b>submit a support ticket</b> by emailing <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> — include the exact error message, screenshots, and any order or transaction references, and our team will take it from there. 🤝",
       chips: (typeof CFG !== "undefined" && CFG.chips) || []
@@ -903,6 +922,7 @@ function handleUser(text) {
     // visitor picked an integration from the disambiguation chips
     var key = pendingCombo.options[text], pq = pendingCombo.query;
     pendingCombo = null;
+    activeCombo = key; // remember the explicit choice even if this answer fails
     var a = answerFromKB(pq, key);
     sayAnswer(a);
     return;
