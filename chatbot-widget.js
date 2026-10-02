@@ -598,6 +598,7 @@ function escapeHtml(s) {
 
 /* ---------- chat behavior ---------- */
 var opened = false, kbIndex = null, kbMeta = null, kbFailed = false, pendingCombo = null;
+var followupsShown = false; // generic follow-up chips show only after the first answer
 var comboIndexCache = {};
 // lazily built search index over a single combo's chunks (for picked integrations)
 function indexForCombo(combo) {
@@ -735,7 +736,9 @@ function answerFromKB(q, comboFilter) {
     return gettingStartedCard(combo);
   }
   var htmlOut = richAnswerHtml(d);
-  var chips = ["How do I connect my Xero account?", "How do I cancel my subscription?"];
+  // generic follow-up chips appear only after the first answer — never repeated
+  var chips = followupsShown ? [] : ["How do I connect my Xero account?", "How do I cancel my subscription?"];
+  followupsShown = true;
   return {
     html: htmlOut, chips: chips,
     // when a rewrite proxy is configured, the widget asks it to turn these
