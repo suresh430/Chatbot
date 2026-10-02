@@ -479,36 +479,27 @@ function setupGuideUrl(combo, idx) {
 function gettingStartedCard(combo, idx) {
   var info = COMBO_CARDS[combo] || {};
   var guide = setupGuideUrl(combo, idx);
-  var label = comboLabel(combo);
-  var n = 0, items = [];
-  function item(lead, rest) { items.push((++n) + ". <b>" + lead + "</b> – " + rest); }
+  var label = comboLabel(combo).replace(/ \+ /g, "-");
   function extLink(url, text) { return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(text) + "</a>"; }
-  if (info.appUrl) {
-    item("Get the app", "Install it from the " + escapeHtml(info.app || "marketplace") + ": " + extLink(info.appUrl, "Get the app"));
-  }
+  var rows = [];
   if (guide) {
-    item("Follow the Setup Guide", "A full step-by-step guide is available here: " + extLink(guide, "Setup Guide"));
+    rows.push('📖 <b>Setup Guide:</b> Follow the step-by-step instructions here: ' + extLink(guide, "Setup Guide"));
+  }
+  if (info.appUrl) {
+    rows.push('🛒 <b>Get the App:</b> Available on the ' + escapeHtml(info.app || "marketplace") + ": " + extLink(info.appUrl, "Get the app"));
   }
   if (info.videoId) {
-    item("Watch the video guide", "A video walkthrough is available on " + extLink("https://www.youtube.com/watch?v=" + info.videoId, "YouTube"));
+    rows.push('🎥 <b>Video Guide:</b> Watch an overview: ' + extLink("https://www.youtube.com/watch?v=" + info.videoId, "YouTube Video"));
   }
   if (info.trialText) {
-    if (info.trialUrl) {
-      item("Try it free", "Start a 30-day free trial (" + escapeHtml(info.trialText.charAt(0).toLowerCase() + info.trialText.slice(1)) + "): " + extLink(info.trialUrl, "Start free trial"));
-    } else {
-      item("Try it free", escapeHtml(info.trialText) + ".");
-    }
+    var trial = '🆓 <b>Free Trial:</b> ' + escapeHtml(info.trialText);
+    trial += info.trialUrl ? ": " + extLink(info.trialUrl, "Start free trial") : ".";
+    rows.push(trial);
   }
-  item("Need hands-on help?", 'Book a complimentary 30-minute onboarding call: ' + extLink(BOOK_URL, "Book a demo") + ' or email us at <a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>");
+  rows.push('📅 <b>Onboarding Support:</b> Book a complimentary 30-minute onboarding call: ' + extLink(BOOK_URL, "Book a call"));
   var html = "Here's how you can get started with the " + escapeHtml(label) + " integration:<br><br>" +
-    items.join("<br>") +
-    "<br><br>Is there anything else I can help you with? 🙂";
-  if (info.videoId) {
-    var yt = "https://www.youtube.com/watch?v=" + escapeHtml(info.videoId);
-    html += '<a class="cfb-yt" href="' + yt + '" target="_blank" rel="noopener">' +
-      '<img src="https://img.youtube.com/vi/' + escapeHtml(info.videoId) + '/hqdefault.jpg" alt="' + escapeHtml(info.videoTitle || "Video guide") + '">' +
-      "<span>" + escapeHtml(info.videoTitle || "Watch the video guide") + "</span></a>";
-  }
+    "• " + rows.join("<br>• ") +
+    "<br><br>Is there anything specific about the setup you need help with? 😊";
   return { html: html, chips: (typeof CFG !== "undefined" && CFG.chips) || [] };
 }
 
