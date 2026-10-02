@@ -382,6 +382,7 @@ var userCfg = window.CloudifyChat || {};
 var CFG = {
   kbUrl:    userCfg.kbUrl    || dataAttr("kb", "kb.json"),
   apiUrl:   userCfg.apiUrl   || dataAttr("api", ""), // e.g. https://your-api/chat — when set, the widget POSTs here instead of searching locally
+  rewriteUrl: userCfg.rewriteUrl || dataAttr("rewrite", ""), // e.g. https://xxx.workers.dev — when set, docs answers are rewritten by AI
   name:     userCfg.name     || dataAttr("name", "Cloudify"),
   color:    userCfg.color    || dataAttr("color", "#1d4ed8"),
   position: userCfg.position || dataAttr("position", "right"), // right | left
@@ -676,7 +677,66 @@ function answerFromKB(q, comboFilter) {
   var htmlOut = "Here's what I found:" + "<br><br>" + trimText(ctxText, 650) + srcLink(d.primary.chunk) +
     '<br><br>Need more help? Reach us at <a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>.";
   var chips = ["How do I connect my Xero account?", "How do I cancel my subscription?"];
-  return { html: htmlOut, chips: chips };
+  return {
+    html: htmlOut, chips: chips,
+    // when a rewrite proxy is configured, the widget asks it to turn these
+    // docs excerpts into a polished answer (falls back to htmlOut on failure)
+    rewrite: {
+      question: q,
+      combo: combo,
+      excerpts: d.context.map(function (c) { return cleanText(c.text); }),
+      primaryUrl: d.primary.chunk.url,
+      primaryTitle: d.primary.chunk.title || d.primary.chunk.url
+    }
+  };
+}
+// minimal sanitizer for AI-rewritten HTML (the model is instructed to use simple
+// formatting; this is defense in depth)
+function sanitizeHtml(h) {
+  return (h || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/href=(["'])(?!https?:\/\/|mailto:)[\s\S]*?\1/gi, 'href="#"');
+}
+// ask the rewrite proxy to turn docs excerpts into a polished answer
+function rewriteAnswer(a) {
+  typing(true);
+  var ctrl = null, timer = null;
+  try { ctrl = new AbortController(); } catch (e) { ctrl = null; }
+  var done = false;
+  function finish(html) {
+    if (done) return; done = true;
+    if (timer) clearTimeout(timer);
+    typing(false);
+    addMsg("cfb-bot", html);
+    addChips(a.chips);
+  }
+  function fallback() { finish(a.html); }
+  if (ctrl) { timer = setTimeout(function () { try { ctrl.abort(); } catch (e) {} fallback(); }, 15000); }
+  var payload = {
+    question: a.rewrite.question,
+    combo: a.rewrite.combo,
+    excerpts: a.rewrite.excerpts
+  };
+  var opts = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) };
+  if (ctrl) opts.signal = ctrl.signal;
+  fetch(CFG.rewriteUrl, opts).then(function (res) {
+    if (!res.ok) throw new Error("bad status");
+    return res.json();
+  }).then(function (data) {
+    if (!data || !data.html) throw new Error("empty");
+    var src = { url: a.rewrite.primaryUrl, title: a.rewrite.primaryTitle };
+    var htmlOut = sanitizeHtml(data.html) + "<br>" + srcLink(src) +
+      '<br><br>Need more help? Reach us at <a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>.";
+    finish(htmlOut);
+  }).catch(function () { fallback(); });
+  if (!ctrl) { /* no AbortController: rely on fetch rejection */ }
+}
+// display an answer, using the AI rewrite when configured and applicable
+function sayAnswer(a) {
+  if (a.rewrite && CFG.rewriteUrl) { rewriteAnswer(a); return; }
+  botSay(a.html, a.chips);
 }
 
 function handleUser(text) {
@@ -689,7 +749,7 @@ function handleUser(text) {
     var key = pendingCombo.options[text], pq = pendingCombo.query;
     pendingCombo = null;
     var a = answerFromKB(pq, key);
-    botSay(a.html, a.chips);
+    sayAnswer(a);
     return;
   }
   pendingCombo = null;
@@ -735,7 +795,7 @@ function askApi(text) {
       botSay("I'm having trouble reaching my knowledge base right now. 😅 Please <a href=\"" + CONTACT_URL + "\" target=\"_blank\" rel=\"noopener\">contact our team</a> directly — we'll get back to you quickly.", []);
     } else if (kbIndex) {
       var a = answerFromKB(text);
-      botSay(a.html, a.chips);
+      sayAnswer(a);
     } else {
       answerWhenReady(text, 6);
     }
@@ -749,7 +809,7 @@ function answerWhenReady(text, triesLeft) {  setTimeout(function () {
     }
     if (kbIndex) {
       var a = answerFromKB(text);
-      botSay(a.html, a.chips);
+      sayAnswer(a);
     } else if (triesLeft > 1) {
       answerWhenReady(text, triesLeft - 1);
     } else {
