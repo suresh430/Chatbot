@@ -67,6 +67,7 @@ function search(index, query, topK) {
   topK = topK || 3;
   var qtoks = tokenize(query), i, t;
   if (!qtoks.length) return [];
+  var qn = query.toLowerCase().replace(/-/g, " "); // normalized for combo matching
   var qtf = {}, qv = {}, qnorm = 0, w;
   qtoks.forEach(function (x) { qtf[x] = (qtf[x] || 0) + 1; });
   Object.keys(qtf).forEach(function (x) {
@@ -84,6 +85,9 @@ function search(index, query, topK) {
     var titleToks = tokenize(index.chunks[i].title), hit = 0;
     qtoks.forEach(function (x) { if (titleToks.indexOf(x) !== -1) hit++; });
     cos += 0.35 * (hit / qtoks.length);
+    // bonus when the visitor named the chunk's app combo ("Xero in Pipedrive")
+    var cb = comboOf(index.chunks[i].url);
+    if (cb) cos += comboBoost(cb, qn);
     scored.push({ i: i, score: cos, matched: matched });
   }
   scored.sort(function (a, b) { return b.score - a.score; });
@@ -109,7 +113,147 @@ function goodMatch(r) {
   return r.score >= 0.55 || (r.score >= 0.30 && r.matched >= 2);
 }
 
-var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, expandQuery: expandQuery, goodMatch: goodMatch };
+/* ---------- app-combo awareness ----------
+ * Cloudify sells integration combos (Pipedrive+Xero, HubSpot+e-conomic, ...),
+ * and the combo lives in the docs URL (/pipedrive/xero/...). We use it to:
+ *  1. boost chunks whose combo the visitor named ("Xero in Pipedrive"),
+ *  2. ask WHICH combo they mean when top hits span several ("connect Xero"),
+ *  3. never mix a "related" source from a different combo into an answer. */
+var KNOWN_APPS = ["hubspot", "pipedrive", "shopify", "stripe", "woocommerce", "shopi",
+  "xero", "e-conomic", "fortnox", "tripletex", "msbc", "quickbooks",
+  "pennylane", "flowlink", "exactonline", "danish-cvr", "company-vat"];
+var APP_LABELS = {
+  "hubspot": "HubSpot", "pipedrive": "Pipedrive", "shopify": "Shopify",
+  "stripe": "Stripe", "woocommerce": "WooCommerce", "shopi": "Shopi",
+  "xero": "Xero", "e-conomic": "e-conomic", "fortnox": "Fortnox",
+  "tripletex": "Tripletex", "msbc": "Business Central", "quickbooks": "QuickBooks",
+  "pennylane": "Pennylane", "flowlink": "FlowLink", "exactonline": "Exact Online",
+  "danish-cvr": "Danish CVR", "company-vat": "Company VAT"
+};
+function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function isAppSeg(seg) {
+  seg = (seg || "").toLowerCase();
+  if (KNOWN_APPS.indexOf(seg) !== -1) return true; // full match first: "e-conomic", "danish-cvr"
+  var parts = seg.split("-"), i;
+  for (i = 0; i < parts.length; i++) {
+    if (KNOWN_APPS.indexOf(parts[i]) !== -1) return true;
+  }
+  return false;
+}
+// "https://docs.cloudify.biz/pipedrive/xero/installation/..." -> "pipedrive/xero", else null
+function comboOf(url) {
+  var m = /^https?:\/\/[^\/]+\/([^?#]+)/.exec(url || "");
+  if (!m) return null;
+  var segs = m[1].split("/").filter(function (s) { return s; });
+  if (segs.length < 2) return null;
+  var a = segs[0].toLowerCase(), b = segs[1].toLowerCase();
+  if (!isAppSeg(a) || !isAppSeg(b)) return null;
+  return a + "/" + b;
+}
+function prettySeg(seg) {
+  seg = (seg || "").toLowerCase();
+  if (APP_LABELS[seg]) return APP_LABELS[seg];
+  return seg.split("-").map(function (p) {
+    return APP_LABELS[p] || (p.charAt(0).toUpperCase() + p.slice(1));
+  }).join(" ");
+}
+function comboLabel(key) {
+  var s = key.split("/"), a = prettySeg(s[0]), b = prettySeg(s[1]);
+  if (b.toLowerCase().indexOf(a.toLowerCase()) !== -1) return b; // "WooCommerce Xero"
+  return a + " + " + b;
+}
+// strings whose presence in the query names this combo, e.g. ["pipedrive","xero"]
+function comboMatchStrings(key) {
+  var out = [];
+  key.split("/").forEach(function (seg) {
+    var norm = seg.replace(/-/g, " ");
+    if (out.indexOf(norm) === -1) out.push(norm);
+    var lbl = (APP_LABELS[seg] || "").toLowerCase();
+    if (lbl && out.indexOf(lbl) === -1) out.push(lbl);
+  });
+  return out;
+}
+// +0.6 per named app of this combo found in the query (word-boundary matched)
+function comboBoost(key, qnorm) {
+  var strs = comboMatchStrings(key), boost = 0, i, re;
+  for (i = 0; i < strs.length; i++) {
+    if (!strs[i]) continue;
+    re = new RegExp("\\b" + escapeRe(strs[i]) + "\\b");
+    if (re.test(qnorm)) boost += 0.6;
+  }
+  return boost;
+}
+// known apps the visitor mentioned, e.g. "connect xero in pipedrive" -> ["xero","pipedrive"]
+function namedApps(qnorm) {
+  var found = [];
+  KNOWN_APPS.forEach(function (app) {
+    var variants = [app.replace(/-/g, " ")];
+    var lbl = (APP_LABELS[app] || "").toLowerCase();
+    if (lbl && variants.indexOf(lbl) === -1) variants.push(lbl);
+    for (var i = 0; i < variants.length; i++) {
+      if (new RegExp("\\b" + escapeRe(variants[i]) + "\\b").test(qnorm)) {
+        found.push(app);
+        break;
+      }
+    }
+  });
+  return found;
+}
+function comboHasApp(key, app) {
+  var want = (APP_LABELS[app] || app).toLowerCase();
+  var segs = key.split("/"), i;
+  for (i = 0; i < segs.length; i++) {
+    if (segs[i] === app) return true;
+    if ((APP_LABELS[segs[i]] || "").toLowerCase() === want) return true;
+  }
+  return false;
+}
+// Pure decision: given ranked good matches, answer directly, ask which combo,
+// or fall back. Never returns a "related" source from a different combo.
+function decideAnswer(results, qnorm) {
+  if (!results.length) return { type: "fallback" };
+  var topCb = comboOf(results[0].chunk.url);
+  if (topCb) {
+    var byCombo = {}, order = [], i, r, cb;
+    for (i = 0; i < results.length; i++) {
+      r = results[i]; cb = comboOf(r.chunk.url);
+      if (cb && !byCombo[cb]) { byCombo[cb] = r.score; order.push(cb); }
+    }
+    if (order.length >= 2 && byCombo[order[1]] >= byCombo[order[0]] * 0.7) {
+      // ambiguous across integrations — but only ask when the visitor named an
+      // app; otherwise there is no signal to disambiguate on, so answer directly
+      var named = namedApps(qnorm);
+      if (named.length) {
+        // ...unless the visitor already named one combo's app ("Xero in Pipedrive")
+        var runner = order[1], namedIt = false;
+        for (i = 0; i < named.length; i++) {
+          if (comboHasApp(topCb, named[i]) && !comboHasApp(runner, named[i])) {
+            namedIt = true; break;
+          }
+        }
+        if (!namedIt) {
+          var labels = [], options = {};
+          for (i = 0; i < Math.min(order.length, 4); i++) {
+            var label = comboLabel(order[i]);
+            labels.push(label);
+            options[label] = order[i];
+          }
+          return { type: "disambiguate", labels: labels, options: options };
+        }
+      }
+    }
+  }
+  var related = null;
+  if (results[1] && results[1].score >= results[0].score * 0.75 &&
+      comboOf(results[1].chunk.url) === topCb &&
+      results[1].chunk.url !== results[0].chunk.url) {
+    related = results[1];
+  }
+  return { type: "answer", primary: results[0], related: related };
+}
+
+var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, expandQuery: expandQuery, goodMatch: goodMatch,
+  comboOf: comboOf, comboLabel: comboLabel, namedApps: namedApps, comboBoost: comboBoost, decideAnswer: decideAnswer };
 if (typeof module !== "undefined" && module.exports) module.exports = ChatEngine;
 
 /* ---------------- widget (browser only) ---------------- */
@@ -225,7 +369,7 @@ function escapeHtml(s) {
 }
 
 /* ---------- chat behavior ---------- */
-var opened = false, kbIndex = null, kbMeta = null, kbFailed = false;
+var opened = false, kbIndex = null, kbMeta = null, kbFailed = false, pendingCombo = null;
 
 function scrollDown() { body.scrollTop = body.scrollHeight; }
 
@@ -273,19 +417,34 @@ function srcLink(chunk) {
   return '<span class="cfb-src">📄 Source: <a href="' + escapeHtml(chunk.url) + '" target="_blank" rel="noopener">' + title + "</a></span>";
 }
 
-function answerFromKB(q) {
-  var results = search(kbIndex, expandQuery(q), 3).filter(goodMatch);
-  if (!results.length) {
+function answerFromKB(q, comboFilter) {
+  var qnorm = q.toLowerCase().replace(/-/g, " ");
+  var results = search(kbIndex, expandQuery(q), 8);
+  if (comboFilter) {
+    // visitor picked an integration: answer only from that combo's pages
+    results = results.filter(function (r) { return comboOf(r.chunk.url) === comboFilter; });
+  }
+  results = results.filter(goodMatch);
+  var d = decideAnswer(results, qnorm);
+  if (d.type === "fallback") {
+    pendingCombo = null;
     return {
       html: "I couldn't find that in our documentation. 🤔 Try asking about <b>installing</b>, <b>configuring</b>, or <b>troubleshooting</b> an integration — or <a href=\"" + CONTACT_URL + "\" target=\"_blank\" rel=\"noopener\">contact our team</a> directly and we'll help!",
       chips: CFG.chips
     };
   }
-  var htmlOut = "Here's what I found:" + "<br><br>" + trimText(results[0].chunk.text, 420) + srcLink(results[0].chunk);
-  // include a second source when it's a close second from a different page
-  if (results[1] && results[1].score >= results[0].score * 0.75 &&
-      results[1].chunk.url !== results[0].chunk.url) {
-    htmlOut += "<br><br>Related: " + trimText(results[1].chunk.text, 280) + srcLink(results[1].chunk);
+  if (d.type === "disambiguate") {
+    // ambiguous across integrations: ask which combo's setup guide they need
+    pendingCombo = { query: q, options: d.options };
+    return {
+      html: "Good question — but the setup steps are different for each integration. 🙂<br><br><b>Which integration are you setting up?</b>",
+      chips: d.labels
+    };
+  }
+  pendingCombo = null;
+  var htmlOut = "Here's what I found:" + "<br><br>" + trimText(d.primary.chunk.text, 420) + srcLink(d.primary.chunk);
+  if (d.related) {
+    htmlOut += "<br><br>Related: " + trimText(d.related.chunk.text, 280) + srcLink(d.related.chunk);
   }
   var chips = ["How do I connect my Xero account?", "How do I cancel my subscription?"];
   return { html: htmlOut, chips: chips };
@@ -296,6 +455,15 @@ function handleUser(text) {
   if (!text) return;
   addMsg("cfb-user", escapeHtml(text));
   input.value = "";
+  if (pendingCombo && pendingCombo.options[text]) {
+    // visitor picked an integration from the disambiguation chips
+    var key = pendingCombo.options[text], pq = pendingCombo.query;
+    pendingCombo = null;
+    var a = answerFromKB(pq, key);
+    botSay(a.html, a.chips);
+    return;
+  }
+  pendingCombo = null;
   var ir = intentReply(text);
   if (ir) { botSay(ir.html || escapeHtml(ir.text), ir.chips); return; }
   if (CFG.apiUrl) { askApi(text); return; }
