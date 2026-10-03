@@ -707,7 +707,7 @@ function intentReply(q) {
     return { text: "You're very welcome! 😊 Anything else I can help with?", chips: CFG.chips };
   if (/\b(bye|goodbye|see you|good night)\b/.test(s))
     return { text: "Goodbye for now! 👋 If you need anything later, I'll be right here.", chips: [] };
-  if (/\b(book|demo|consultation|consult|call|talk to (a |someone|human)|human|agent|support|contact|email|phone)\b/.test(s))
+  if (/\b(book|demo|consultation|consult|call|talk to (a |someone|human)|human|agent|support|contact|email|phone|connect (me |us )?(with|to) (your |our |the )?team|talk to (your |our |the )?team|connect me with (someone|a human))\b/.test(s))
     return { html: "To talk to our marketplace team at Cloudify, you can <a href=\"" + BOOK_URL + "\" target=\"_blank\" rel=\"noopener\">schedule a meeting with us</a>. A calendar invitation will be shared with you.<br><br>Alternatively, feel free to reach out to us at <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> for any questions or assistance. 😀",
              text: "To talk to our marketplace team at Cloudify, you can schedule a meeting with us.", chips: [] };
   if (/\b(who are you|your name|what are you)\b/.test(s))
