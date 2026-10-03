@@ -417,6 +417,65 @@ function directAnswer(results, topCb, index) {
   }
   return { type: "answer", primary: primary, context: pageChunks };
 }
+/* ---------- centralized combo resolution ----------
+ * Single place that decides "which integration is the user asking about?"
+ * All paths (direct question, chip pick, Others flow, memory) go through here.
+ *
+ * opts: { explicitKey } — user explicitly picked a combo (chip/Others), use it directly
+ *       { activeCombo } — remembered combo from conversation context
+ *
+ * Returns:
+ *   {type:"combo", key}         — search within this combo's docs
+ *   {type:"disambiguate", pivot} — ask which integration (pivot=app or null for top 6)
+ *   {type:"custom", apps}       — no such combo exists → custom.cloudify.biz
+ *   {type:"clarify"}            — vague follow-up in memory context, ask for detail
+ */
+function resolveCombo(q, opts) {
+  opts = opts || {};
+  var qnorm = (q || "").toLowerCase().replace(/-/g, " ");
+  var combos = (kbIndex && kbIndex.combos) || {};
+
+  // 1. Explicit pick (chip or Others flow) — trust it, no re-deciding.
+  if (opts.explicitKey) return { type: "combo", key: opts.explicitKey };
+
+  var named = namedApps(qnorm);
+
+  // 2. Two or more apps named — they must ALL be in one combo.
+  if (named.length >= 2) {
+    var bestKey = null, bestPop = -1, k, n, ok;
+    var keys = Object.keys(combos);
+    for (k = 0; k < keys.length; k++) {
+      ok = true;
+      for (n = 0; n < named.length; n++) {
+        if (!comboHasApp(keys[k], named[n])) { ok = false; break; }
+      }
+      if (ok && combos[keys[k]] > bestPop) { bestPop = combos[keys[k]]; bestKey = keys[k]; }
+    }
+    if (bestKey) return { type: "combo", key: bestKey };
+    return { type: "custom", apps: named }; // no such integration exists
+  }
+
+  // 3. One app named.
+  if (named.length === 1) {
+    var app = named[0];
+    // In memory context, if the named app is part of the remembered combo,
+    // stay in context (vague → clarify, specific → answer).
+    if (opts.activeCombo && comboHasApp(opts.activeCombo, app)) {
+      if (isVagueQuestion(q)) return { type: "clarify" };
+      return { type: "combo", key: opts.activeCombo };
+    }
+    // Different app (or no memory) — show all combos for that app.
+    return { type: "disambiguate", pivot: app };
+  }
+
+  // 4. No apps named.
+  if (opts.activeCombo) {
+    if (isVagueQuestion(q)) return { type: "clarify" };
+    return { type: "combo", key: opts.activeCombo };
+  }
+  return { type: "disambiguate", pivot: null };
+}
+
 function decideAnswer(results, qnorm, combos, forceDirect, index) {
   if (!results.length) return { type: "fallback" };
   var topCb = comboOf(results[0].chunk.url);
@@ -920,72 +979,82 @@ function memoryFilter(qnorm) {
 }
 
 function answerFromKB(q, comboFilter, isMemory) {
-  var qnorm = q.toLowerCase().replace(/-/g, " ");
-  var index = kbIndex;
-  if (comboFilter) {
-    // visitor picked an integration: search only within that combo's pages
-    index = indexForCombo(comboFilter);
-    if (!index) {
-      pendingCombo = null;
-      return {
-        html: "Please <b>submit a support ticket</b> by emailing <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> — include the exact error message, screenshots, and any order or transaction references, and our team will take it from there. 🤝",
-        chips: (typeof CFG !== "undefined" && CFG.chips) || []
-      };
-    }
+  // Centralized combo resolution — one place decides which integration.
+  var res;
+  if (comboFilter && !isMemory) {
+    res = { type: "combo", key: comboFilter }; // explicit pick, trust it
+  } else if (comboFilter && isMemory) {
+    res = resolveCombo(q, { activeCombo: comboFilter });
+  } else {
+    res = resolveCombo(q, { activeCombo: activeCombo });
   }
-  var results = search(index, expandQuery(q), 15).filter(goodMatch);
-  var memoryBypassed = false;
-  if (isMemory && comboFilter && !results.length) {
-    // No strong match in the remembered combo's docs: accept a weaker in-context
-    // hit rather than failing outright — the sub-index is already combo-filtered,
-    // so top hits are relevant. (We do NOT inject the combo names into the query:
-    // that distorted rankings via title bonuses.) Truly vague questions are still
-    // caught by isVagueQuestion in the fallback below.
-    var weak = search(index, expandQuery(q), 5);
-    if (weak.length > 0 && weak[0].score >= 0.25) results = weak.slice(0, 3);
-  }
-  if (isMemory && comboFilter && !results.length) {
-    // The remembered combo has no docs for this (e.g. cancel page missing for
-    // pipedrive/e-conomic) — retry the FULL index rather than ticketing. If the
-    // answer comes from a different combo, memory switches to it below.
-    var full = search(kbIndex, expandQuery(q), 15).filter(goodMatch);
-    if (full.length > 0) { results = full; index = kbIndex; memoryBypassed = true; }
-  }
-  // once the visitor picked an integration, never ask again - answer it directly
-  var d = decideAnswer(results, qnorm, kbIndex.combos, !!comboFilter && !memoryBypassed, index);
-  if (d.type === "custom") {
-    // visitor named 2+ apps but no combo has all of them — this integration
-    // doesn't exist. Point to custom integration services, don't guess.
+
+  // --- non-search resolutions ---
+  if (res.type === "custom") {
     pendingCombo = null;
     return { html: customComboMessage(q), chips: [] };
   }
-  if (d.type === "fallback") {
+  if (res.type === "clarify") {
     pendingCombo = null;
-    if (isMemory && isVagueQuestion(q)) {
-      // In an established combo context, don't re-ask "which integration?" and don't
-      // ticket a vague question — ask what they need. Memory stays set.
-      return {
-        html: "I want to point you to the right place — could you share a bit more detail about what you're trying to do? 🙂",
-        chips: []
-      };
+    return {
+      html: "I want to point you to the right place — could you share a bit more detail about what you're trying to do? 🙂",
+      chips: []
+    };
+  }
+  if (res.type === "disambiguate") {
+    pendingCombo = null;
+    var dchips, dhtml;
+    if (res.pivot) {
+      var pkeys = combosForApp(kbIndex.combos, res.pivot);
+      dchips = comboChips(pkeys);
+      dhtml = "Good question - but the setup steps are different for each integration. 🙂<br><br><b>Which " +
+        prettySeg(res.pivot) + " integration are you setting up?</b>";
+    } else {
+      dchips = comboChips(topCombos(kbIndex.combos, 6));
+      dhtml = "Sure - I\u2019ll point you to the right guide. 🙂<br><br><b>Which integration is this about?</b>";
     }
+    pendingCombo = { query: q, options: dchips.options };
+    return { html: dhtml, chips: dchips.labels };
+  }
+
+  // --- res.type === "combo": search within the combo's docs ---
+  var key = res.key;
+  var index = indexForCombo(key);
+  if (!index) {
+    pendingCombo = null;
+    return {
+      html: "Please <b>submit a support ticket</b> by emailing <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> — include the exact error message, screenshots, and any order or transaction references, and our team will take it from there. 🤝",
+      chips: (typeof CFG !== "undefined" && CFG.chips) || []
+    };
+  }
+  var results = search(index, expandQuery(q), 15).filter(goodMatch);
+  var memoryBypassed = false;
+  var isMemCtx = !!(comboFilter && isMemory);
+  if (isMemCtx && !results.length) {
+    var weak = search(index, expandQuery(q), 5);
+    if (weak.length > 0 && weak[0].score >= 0.25) results = weak.slice(0, 3);
+  }
+  if (isMemCtx && !results.length) {
+    var full = search(kbIndex, expandQuery(q), 15).filter(goodMatch);
+    if (full.length > 0) { results = full; index = kbIndex; memoryBypassed = true; }
+  }
+  if (!results.length) {
+    // No docs found in this combo.
+    pendingCombo = null;
     if (isOutOfScope(q)) {
-      // Not a Cloudify question at all ("capital of France") — don't ticket it,
-      // just say what we're here for.
       return {
         html: "I'm the Cloudify docs assistant, so I can only help with our accounting integrations (setup, invoicing, syncing, troubleshooting). 🙂 What would you like to know about them?",
         chips: []
       };
     }
-    if (!isMemory && !comboFilter && !namedApps(q.toLowerCase().replace(/-/g, " ")).length) {
-      // In-scope but vague with no app named and no combo picked yet
-      // ("What are the benefits?") — ask which integration instead of ticketing.
-      // Skip when comboFilter is set (user already picked via Others/chip).
-      var chips3 = comboChips(topCombos(kbIndex.combos, 6));
-      pendingCombo = { query: q, options: chips3.options };
+    // Vague in-scope question with no search hits — ask which integration
+    // (unless one was already picked).
+    if (!comboFilter) {
+      var fchips = comboChips(topCombos(kbIndex.combos, 6));
+      pendingCombo = { query: q, options: fchips.options };
       return {
         html: "Sure - I\u2019ll point you to the right guide. 🙂<br><br><b>Which integration is this about?</b>",
-        chips: chips3.labels
+        chips: fchips.labels
       };
     }
     return {
@@ -993,59 +1062,31 @@ function answerFromKB(q, comboFilter, isMemory) {
       chips: (typeof CFG !== "undefined" && CFG.chips) || []
     };
   }
-  if (d.type === "disambiguate") {
-    // ask which integration they mean; the question is kept so the picked
-    // combo answers it
-    if (isMemory && isVagueQuestion(q) && !namedApps(q.toLowerCase().replace(/-/g, " ")).length) {
-      // In an established combo context, a vague question with NO app names
-      // ("show me steps") should ask for detail, not re-ask which integration.
-      // If they named an app ("What about Shopify?"), let it disambiguate.
-      // Memory stays set.
-      pendingCombo = null;
-      return {
-        html: "I want to point you to the right place — could you share a bit more detail about what you're trying to do? 🙂",
-        chips: []
-      };
-    }
-    pendingCombo = { query: q, options: d.options };
-    return { html: d.html, chips: d.labels };
-  }
+
+  // We have results — build the answer.
   pendingCombo = null;
-  // remember the combo this answer came from for follow-up questions
-  var answeredCombo = memoryBypassed ? comboOf(d.primary.chunk.url) : (comboFilter || comboOf(d.primary.chunk.url));
+  var answeredCombo = memoryBypassed ? comboOf(results[0].chunk.url) : key;
   if (answeredCombo) activeCombo = answeredCombo;
-  // rich "getting started" card for installation questions about an integration
-  // with verified links (marketplace, video, trial); other combos keep the
-  // specific docs answer
-  var combo = comboFilter || comboOf(d.primary.chunk.url);
-  // rich "getting started" card for installation questions: curated links where we
-  // have them (marketplace, video, trial), otherwise the docs-derived setup guide
-  // + booking — every integration gets the full end-to-end card, not just HubSpot Xero
-  if (combo && isGettingStarted(q)) {
-    var card = gettingStartedCard(combo);
+  if (isGettingStarted(q)) {
+    var card = gettingStartedCard(key);
     if (card.linkUrl) lastAnswer = { title: card.linkTitle, url: card.linkUrl };
     return card;
   }
+  var d = directAnswer(results, key, index);
   var htmlOut = richAnswerHtml(d, q);
-  // remember this answer's primary source for "do you have a link?" follow-ups
   lastAnswer = { title: d.primary.chunk.title || d.primary.chunk.url, url: d.primary.chunk.url };
-  // no generic follow-up suggestion chips — they were never relevant to the
-  // visitor's actual question (Lyro shows none either)
-  var chips = [];
   return {
-    html: htmlOut, chips: chips,
-    // when a rewrite proxy is configured, the widget asks it to turn these
-    // docs excerpts into a polished answer (falls back to htmlOut on failure)
+    html: htmlOut, chips: [],
     rewrite: {
       question: q,
-      combo: combo,
+      combo: key,
       excerpts: d.context.map(function (c) { return cleanText(c.text); }),
       primaryUrl: d.primary.chunk.url,
       primaryTitle: d.primary.chunk.title || d.primary.chunk.url
     }
   };
 }
-// minimal sanitizer for AI-rewritten HTML (the model is instructed to use simple
+
 // formatting; this is defense in depth)
 function sanitizeHtml(h) {
   return (h || "")
