@@ -244,6 +244,23 @@ function comboBoost(key, qnorm) {
 // Typo-tolerant: "hubspott", "xerro", "shopfy" still match (same rules as correctSpelling).
 function namedApps(qnorm) {
   var found = [];
+  var toks = qnorm.split(/[^a-z0-9]+/);
+  // Tokens that exactly match an app are "claimed" — they must not also
+  // typo-match a different app (e.g. "shopify" must not match "shopi").
+  var claimed = {};
+  KNOWN_APPS.forEach(function (app) {
+    var variants = [app.replace(/-/g, " "), app.replace(/-/g, "")];
+    var lbl = (APP_LABELS[app] || "").toLowerCase();
+    if (lbl && variants.indexOf(lbl) === -1) variants.push(lbl);
+    for (var i = 0; i < variants.length; i++) {
+      var re = new RegExp("\\b" + escapeRe(variants[i]) + "\\b");
+      var m = qnorm.match(re);
+      if (m) {
+        // mark the matched token(s) as claimed
+        variants[i].split(" ").forEach(function (w) { claimed[w] = 1; });
+      }
+    }
+  });
   KNOWN_APPS.forEach(function (app) {
     // hyphenated apps need all spellings: "e-conomic", "e conomic", "economic"
     var variants = [app.replace(/-/g, " "), app.replace(/-/g, "")];
@@ -257,11 +274,10 @@ function namedApps(qnorm) {
       }
     }
     if (!matched) {
-      // no exact hit — try typo tolerance on each query token
-      var toks = qnorm.split(/[^a-z0-9]+/);
+      // no exact hit — try typo tolerance on each unclaimed query token
       for (var t = 0; t < toks.length && !matched; t++) {
         var tok = toks[t];
-        if (tok.length < 4) continue;
+        if (tok.length < 4 || claimed[tok]) continue;
         for (var v = 0; v < variants.length && !matched; v++) {
           var variant = variants[v].replace(/ /g, "");
           if (variant.length < 4 || tok.charAt(0) !== variant.charAt(0)) continue;
@@ -391,6 +407,18 @@ function decideAnswer(results, qnorm, combos, forceDirect, index) {
   var topCb = comboOf(results[0].chunk.url);
   if (!forceDirect) {
     var named = namedApps(qnorm), i, a;
+    if (named.length >= 2) {
+      // visitor named 2+ apps — if no combo actually has ALL of them, this
+      // integration doesn't exist. Don't guess with a partial match.
+      var validCombo = false, allKeys = combos ? Object.keys(combos) : [], k, n;
+      for (k = 0; k < allKeys.length && !validCombo; k++) {
+        validCombo = true;
+        for (n = 0; n < named.length; n++) {
+          if (!comboHasApp(allKeys[k], named[n])) { validCombo = false; break; }
+        }
+      }
+      if (!validCombo) return { type: "custom" };
+    }
     if (named.length && topCb) {
       var order = comboOrder(results);
       var runner = order.length > 1 ? order[1] : null;
@@ -910,6 +938,15 @@ function answerFromKB(q, comboFilter, isMemory) {
   }
   // once the visitor picked an integration, never ask again - answer it directly
   var d = decideAnswer(results, qnorm, kbIndex.combos, !!comboFilter && !memoryBypassed, index);
+  if (d.type === "custom") {
+    // visitor named 2+ apps but no combo has all of them — this integration
+    // doesn't exist. Point to custom integration services, don't guess.
+    pendingCombo = null;
+    return {
+      html: "This app combo needs our custom integration services. 🙂<br><br>Please check <a href=\"https://custom.cloudify.biz\" target=\"_blank\" rel=\"noopener\">custom.cloudify.biz</a> — or email <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> and our team will help you out. 🤝",
+      chips: []
+    };
+  }
   if (d.type === "fallback") {
     pendingCombo = null;
     if (isMemory && isVagueQuestion(q)) {
