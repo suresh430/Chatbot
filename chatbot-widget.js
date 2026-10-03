@@ -111,7 +111,9 @@ function search(index, query, topK) {
   var qtoks = tokenize(query), i, t;
   if (!qtoks.length) return [];
   qtoks = qtoks.map(function (tok) { return correctSpelling(index, tok); });
-  var qn = query.toLowerCase().replace(/-/g, " "); // normalized for combo matching
+  // Use CORRECTED tokens for combo matching too — otherwise a typo like
+  // "pipedrivee" won't boost the pipedrive combos ("qn" had the raw typo).
+  var qn = qtoks.join(" ");
   var qtf = {}, qv = {}, qnorm = 0, w;
   qtoks.forEach(function (x) { qtf[x] = (qtf[x] || 0) + 1; });
   Object.keys(qtf).forEach(function (x) {
@@ -187,7 +189,8 @@ var DOMAIN_WORDS = {setup:1, install:1, installation:1, configure:1, configurati
   docs:1, workflow:1, workflows:1, customer:1, customers:1, product:1, products:1,
   contact:1, contacts:1, deal:1, deals:1, payment:1, payments:1, tax:1, taxes:1,
   mapping:1, mapped:1, field:1, fields:1, api:1, webhook:1, automate:1, automation:1,
-  manual:1, how:1, why:1};
+  manual:1, how:1, why:1, benefits:1, benefit:1, features:1, feature:1, advantages:1,
+  advantage:1};
 function isAppSeg(seg) {
   seg = (seg || "").toLowerCase();
   if (KNOWN_APPS.indexOf(seg) !== -1) return true; // full match first: "e-conomic", "danish-cvr"
@@ -974,6 +977,16 @@ function answerFromKB(q, comboFilter, isMemory) {
         chips: []
       };
     }
+    if (!isMemory && !namedApps(q.toLowerCase().replace(/-/g, " ")).length) {
+      // In-scope but vague with no app named ("What are the benefits?") —
+      // ask which integration instead of ticketing.
+      var chips3 = comboChips(topCombos(kbIndex.combos, 6));
+      pendingCombo = { query: q, options: chips3.options };
+      return {
+        html: "Sure - I\u2019ll point you to the right guide. 🙂<br><br><b>Which integration is this about?</b>",
+        chips: chips3.labels
+      };
+    }
     return {
       html: "Please <b>submit a support ticket</b> by emailing <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> — include the exact error message, screenshots, and any order or transaction references, and our team will take it from there. 🤝",
       chips: (typeof CFG !== "undefined" && CFG.chips) || []
@@ -982,9 +995,11 @@ function answerFromKB(q, comboFilter, isMemory) {
   if (d.type === "disambiguate") {
     // ask which integration they mean; the question is kept so the picked
     // combo answers it
-    if (isMemory && isVagueQuestion(q)) {
-      // In an established combo context, a vague question ("show me steps")
-      // should ask for detail, not re-ask which integration — memory stays set.
+    if (isMemory && isVagueQuestion(q) && !namedApps(q.toLowerCase().replace(/-/g, " ")).length) {
+      // In an established combo context, a vague question with NO app names
+      // ("show me steps") should ask for detail, not re-ask which integration.
+      // If they named an app ("What about Shopify?"), let it disambiguate.
+      // Memory stays set.
       pendingCombo = null;
       return {
         html: "I want to point you to the right place — could you share a bit more detail about what you're trying to do? 🙂",
