@@ -955,6 +955,10 @@ function handleUser(text) {
   if (!text) return;
   addMsg("cfb-user", escapeHtml(text));
   input.value = "";
+  // "Hi, I need to setup pipedrive xero" — a leading greeting must not swallow the
+  // real question. Strip it and answer what they actually asked.
+  var stripped = text.replace(/^(hi+|hello|hey|yo|namaste|good\s+(morning|afternoon|evening))[,!. ]+/i, "").trim();
+  if (stripped) text = stripped;
   if (pendingCombo && pendingCombo.options[text]) {
     // visitor picked an integration from the disambiguation chips
     var key = pendingCombo.options[text], pq = pendingCombo.query;
