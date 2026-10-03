@@ -520,9 +520,6 @@ function intentReply(q) {
     return { text: "I'm " + CFG.name + ", the Cloudify docs assistant. I answer from our documentation — ask me about installing, configuring, or troubleshooting an integration!", chips: CFG.chips };
   return null;
 }
-function helpLine() {
-  return "How can I help you today? Ask me about installing, configuring, or troubleshooting an integration.";
-}
 
 /* ---------- styles ---------- */
 var CSS = [
@@ -1016,7 +1013,6 @@ function toggle(open) {
       opened = true;
       var w1 = CFG.welcome || ("Hi there! 👋 Welcome to <b>Cloudify</b>. I'm " + escapeHtml(CFG.name) + ", your website assistant.");
       botSay(w1, null, 500);
-      setTimeout(function () { botSay(helpLine(), CFG.chips); }, 1400);
     }
     setTimeout(function () { input.focus(); }, 150);
   }
