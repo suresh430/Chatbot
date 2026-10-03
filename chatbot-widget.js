@@ -385,7 +385,19 @@ function decideAnswer(results, qnorm, combos, forceDirect, index) {
 }
 
 function isGettingStarted(q) {
-  return /\b(getting started|get started|need (to )?set ?up|want (to )?set ?up|how (do|can|to) (i|we|you) (start|begin|install|set ?up)|how to (start|begin|install|set ?up|get started)|install (the|this|an?|my) (integration|app)|set ?up (the|this|an?|my) (integration|app))\b/i.test(q || "");
+  var s = (q || "").toLowerCase();
+  // "setup automation" is the invoice feature, not onboarding — never the card
+  if (/\bsetup automation\b/.test(s)) return false;
+  if (!/\b(set ?up|install|getting started|get started)\b/.test(s)) return false;
+  // A general "setup <integration>" request (e.g. "Setup Hubspot xero" as a first
+  // message) wants the full end-to-end setup card. But a specific config question
+  // ("how do I setup invoice sync rules") wants the docs answer instead — so strip
+  // setup-words, app names and filler; if almost nothing remains, it's general.
+  var t = s.replace(/\b(set ?up|install|getting started|get started|guide|integration|app|hubspot|xero|shopify|woocommerce|pipedrive|fortnox|e-?conomic|pennylane|tripletex|exact|visma|dynamics|netsuite|sage|quickbooks|freshbooks|zoho|myob)\b/g, " ")
+           .replace(/\b(how|to|do|does|can|could|i|we|you|the|a|an|my|our|me|please|need|want|with|for|is|are|it)\b/g, " ")
+           .replace(/[^a-z0-9]+/g, " ").trim();
+  var toks = t ? t.split(" ").filter(function (w) { return w.length > 1; }) : [];
+  return toks.length < 2;
 }
 var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, expandQuery: expandQuery, goodMatch: goodMatch,
   comboOf: comboOf, comboLabel: comboLabel, namedApps: namedApps, comboBoost: comboBoost, decideAnswer: decideAnswer,
