@@ -241,6 +241,7 @@ function comboBoost(key, qnorm) {
   return boost;
 }
 // known apps the visitor mentioned, e.g. "connect xero in pipedrive" -> ["xero","pipedrive"]
+// Typo-tolerant: "hubspott", "xerro", "shopfy" still match (same rules as correctSpelling).
 function namedApps(qnorm) {
   var found = [];
   KNOWN_APPS.forEach(function (app) {
@@ -248,12 +249,29 @@ function namedApps(qnorm) {
     var variants = [app.replace(/-/g, " "), app.replace(/-/g, "")];
     var lbl = (APP_LABELS[app] || "").toLowerCase();
     if (lbl && variants.indexOf(lbl) === -1) variants.push(lbl);
+    var matched = false;
     for (var i = 0; i < variants.length; i++) {
       if (new RegExp("\\b" + escapeRe(variants[i]) + "\\b").test(qnorm)) {
-        found.push(app);
+        matched = true;
         break;
       }
     }
+    if (!matched) {
+      // no exact hit — try typo tolerance on each query token
+      var toks = qnorm.split(/[^a-z0-9]+/);
+      for (var t = 0; t < toks.length && !matched; t++) {
+        var tok = toks[t];
+        if (tok.length < 4) continue;
+        for (var v = 0; v < variants.length && !matched; v++) {
+          var variant = variants[v].replace(/ /g, "");
+          if (variant.length < 4 || tok.charAt(0) !== variant.charAt(0)) continue;
+          var maxEd = tok.length >= 7 ? 2 : 1;
+          if (Math.abs(tok.length - variant.length) > maxEd) continue;
+          if (editDistance(tok, variant, maxEd) <= maxEd) matched = true;
+        }
+      }
+    }
+    if (matched) found.push(app);
   });
   return found;
 }
