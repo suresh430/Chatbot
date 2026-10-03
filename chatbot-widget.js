@@ -845,6 +845,7 @@ function answerFromKB(q, comboFilter, isMemory) {
     }
   }
   var results = search(index, expandQuery(q), 15).filter(goodMatch);
+  var memoryBypassed = false;
   if (isMemory && comboFilter && !results.length) {
     // No strong match in the remembered combo's docs: accept a weaker in-context
     // hit rather than failing outright — the sub-index is already combo-filtered,
@@ -854,8 +855,15 @@ function answerFromKB(q, comboFilter, isMemory) {
     var weak = search(index, expandQuery(q), 5);
     if (weak.length > 0 && weak[0].score >= 0.25) results = weak.slice(0, 3);
   }
+  if (isMemory && comboFilter && !results.length) {
+    // The remembered combo has no docs for this (e.g. cancel page missing for
+    // pipedrive/e-conomic) — retry the FULL index rather than ticketing. If the
+    // answer comes from a different combo, memory switches to it below.
+    var full = search(kbIndex, expandQuery(q), 15).filter(goodMatch);
+    if (full.length > 0) { results = full; index = kbIndex; memoryBypassed = true; }
+  }
   // once the visitor picked an integration, never ask again - answer it directly
-  var d = decideAnswer(results, qnorm, kbIndex.combos, !!comboFilter, index);
+  var d = decideAnswer(results, qnorm, kbIndex.combos, !!comboFilter && !memoryBypassed, index);
   if (d.type === "fallback") {
     pendingCombo = null;
     if (isMemory && isVagueQuestion(q)) {
@@ -887,7 +895,7 @@ function answerFromKB(q, comboFilter, isMemory) {
   }
   pendingCombo = null;
   // remember the combo this answer came from for follow-up questions
-  var answeredCombo = comboFilter || comboOf(d.primary.chunk.url);
+  var answeredCombo = memoryBypassed ? comboOf(d.primary.chunk.url) : (comboFilter || comboOf(d.primary.chunk.url));
   if (answeredCombo) activeCombo = answeredCombo;
   // rich "getting started" card for installation questions about an integration
   // with verified links (marketplace, video, trial); other combos keep the
