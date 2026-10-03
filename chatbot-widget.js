@@ -331,6 +331,8 @@ function comboChips(keys) {
 }
 // Match free-typed app names ("HubSpot + QuickBooks") to a known combo key.
 // Returns the combo key, or null if nothing matches.
+// When 2+ apps are named, ALL must be in the combo — a partial match (e.g.
+// "Stripe Xero" matching "hubspot/xero" via just "xero") is worse than no match.
 function matchTypedCombo(text) {
   if (!kbIndex || !kbIndex.combos) return null;
   var qnorm = (text || "").toLowerCase().replace(/-/g, " ");
@@ -347,6 +349,8 @@ function matchTypedCombo(text) {
       best = key;
     }
   }
+  // multi-app request with no combo covering all of them -> no match (don't guess)
+  if (apps.length > 1 && bestScore < apps.length) return null;
   return bestScore > 0 ? best : null;
 }
 function pageSteps(index, primary, maxSteps) {
@@ -1073,7 +1077,7 @@ function handleUser(text) {
       var ca = answerFromKB(customQ, customCombo);
       sayAnswer(ca);
     } else {
-      botSay("Thanks! We don't have a documented integration for <b>" + escapeHtml(text) + "</b> yet. 🙂<br><br>Please <b>submit a support ticket</b> by emailing <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> — let our team know which apps you'd like connected and we'll take it from there. 🤝", []);
+      botSay("Thanks! We don't have a documented integration for <b>" + escapeHtml(text) + "</b> yet. 🙂<br><br>For a custom integration, please check <a href=\"https://custom.cloudify.biz\" target=\"_blank\" rel=\"noopener\">custom.cloudify.biz</a> — or email <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> and our team will help you out. 🤝", []);
     }
     return;
   }
