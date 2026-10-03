@@ -977,9 +977,10 @@ function answerFromKB(q, comboFilter, isMemory) {
         chips: []
       };
     }
-    if (!isMemory && !namedApps(q.toLowerCase().replace(/-/g, " ")).length) {
-      // In-scope but vague with no app named ("What are the benefits?") —
-      // ask which integration instead of ticketing.
+    if (!isMemory && !comboFilter && !namedApps(q.toLowerCase().replace(/-/g, " ")).length) {
+      // In-scope but vague with no app named and no combo picked yet
+      // ("What are the benefits?") — ask which integration instead of ticketing.
+      // Skip when comboFilter is set (user already picked via Others/chip).
       var chips3 = comboChips(topCombos(kbIndex.combos, 6));
       pendingCombo = { query: q, options: chips3.options };
       return {
@@ -1135,8 +1136,16 @@ function handleUser(text) {
     var customCombo = matchTypedCombo(text);
     if (customCombo) {
       activeCombo = customCombo; // remember the explicit choice even if this answer fails
-      var ca = answerFromKB(customQ, customCombo);
-      sayAnswer(ca);
+      // If the original question was a getting-started question, show the
+      // setup card directly — don't rely on search finding it.
+      if (isGettingStarted(customQ)) {
+        var card = gettingStartedCard(customCombo);
+        if (card.linkUrl) lastAnswer = { title: card.linkTitle, url: card.linkUrl };
+        sayAnswer(card);
+      } else {
+        var ca = answerFromKB(customQ, customCombo);
+        sayAnswer(ca);
+      }
     } else {
       botSay(customComboMessage(text), []);
     }
