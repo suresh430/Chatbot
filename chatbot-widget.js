@@ -392,6 +392,7 @@ var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, e
   combosForApp: combosForApp, comboHasApp: comboHasApp, isGettingStarted: isGettingStarted,
   gettingStartedCard: gettingStartedCard, richAnswerHtml: richAnswerHtml,
   closingFor: closingFor, supportLine: supportLine, isTrouble: isTrouble,
+  isLinkRequest: isLinkRequest, linkReply: linkReply,
   memoryFilter: memoryFilter, answerFromKB: answerFromKB, isVagueQuestion: isVagueQuestion,
   getActiveCombo: function () { return activeCombo; },
   setActiveCombo: function (c) { activeCombo = c; },
@@ -501,7 +502,8 @@ function gettingStartedCard(combo, idx) {
   var html = "Here's how you can get started with the " + escapeHtml(label) + " integration:<br><br>" +
     "• " + rows.join("<br>• ") +
     "<br><br>Is there anything specific about the setup you need help with? 😊";
-  return { html: html, chips: (typeof CFG !== "undefined" && CFG.chips) || [] };
+  return { html: html, chips: (typeof CFG !== "undefined" && CFG.chips) || [],
+           linkUrl: guide || null, linkTitle: guide ? "Setup Guide" : null };
 }
 
 /* ---------- tiny intent layer (runs before KB search) ---------- */
@@ -605,6 +607,7 @@ function escapeHtml(s) {
 
 /* ---------- chat behavior ---------- */
 var opened = false, kbIndex = null, kbMeta = null, kbFailed = false, pendingCombo = null, activeCombo = null;
+var lastAnswer = null; // {title, url} of the most recent answer's primary source — for "do you have a link?" follow-ups
 // lazily built search index over a single combo's chunks (for picked integrations)
 function indexForCombo(combo) {
   if (!comboIndexCache[combo]) {
@@ -669,6 +672,32 @@ function trimText(t, n) {
 function srcLink(chunk) {
   var title = escapeHtml(chunk.title || chunk.url);
   return '<span class="cfb-src">📄 Source: <a href="' + escapeHtml(chunk.url) + '" target="_blank" rel="noopener">' + title + "</a></span>";
+}
+
+/* ---------- "do you have a link?" follow-ups ----------
+ * A visitor asking for a link usually means the source link of the previous
+ * answer ("Ok did you have link?") — NOT a docs search for the word "link"
+ * (which would match product "Direct Link" matching and invent a problem).
+ * We answer from the remembered last answer instead of searching. */
+function isLinkRequest(q) {
+  var s = (q || "").toLowerCase().trim();
+  if (!/\blink\b/.test(s)) return false;
+  // docs topic, not a URL request: "link products", "how to link", "linking X"
+  if (/\blink(ing)?\s+(products?|invoices?|quotes?|accounts?|contacts?|orders?|items?)\b/.test(s)) return false;
+  if (/\bhow\s+(do|to|can)\b[^?.]{0,25}\blink\b/.test(s)) return false;
+  // URL request: "do you have a link", "did you have link", "share the link",
+  // "give me the link", "link me to the setup guide", "link please"
+  return /\b(have|has|got|give|send|share|provide|post|drop)\b.{0,30}\blink\b/.test(s) ||
+         /\blink\s+me\b/.test(s) ||
+         /\blink\b.{0,20}\b(please|pls)\b/.test(s);
+}
+function linkReply(q) {
+  if (!isLinkRequest(q)) return null;
+  if (lastAnswer && lastAnswer.url) {
+    return 'Yes! Here\u2019s the link: 📄 <a href="' + escapeHtml(lastAnswer.url) +
+      '" target="_blank" rel="noopener">' + escapeHtml(lastAnswer.title || lastAnswer.url) + "</a> 🙂";
+  }
+  return "Which link are you looking for? Tell me the topic \u2014 for example the setup guide \u2014 and I\u2019ll share the right one. 🙂";
 }
 
 /* ---------- Lyro-style closings & support escalation ---------- */
@@ -811,9 +840,13 @@ function answerFromKB(q, comboFilter, isMemory) {
   // specific docs answer
   var combo = comboFilter || comboOf(d.primary.chunk.url);
   if (combo && COMBO_CARDS[combo] && isGettingStarted(q)) {
-    return gettingStartedCard(combo);
+    var card = gettingStartedCard(combo);
+    if (card.linkUrl) lastAnswer = { title: card.linkTitle, url: card.linkUrl };
+    return card;
   }
   var htmlOut = richAnswerHtml(d, q);
+  // remember this answer's primary source for "do you have a link?" follow-ups
+  lastAnswer = { title: d.primary.chunk.title || d.primary.chunk.url, url: d.primary.chunk.url };
   // no generic follow-up suggestion chips — they were never relevant to the
   // visitor's actual question (Lyro shows none either)
   var chips = [];
@@ -922,6 +955,8 @@ function handleUser(text) {
   pendingCombo = null;
   var ir = intentReply(text);
   if (ir) { botSay(ir.html || escapeHtml(ir.text), ir.chips); return; }
+  var lr = linkReply(text);
+  if (lr) { botSay(lr, []); return; }
   if (CFG.apiUrl) { askApi(text); return; }
   if (kbFailed) {
     botSay("I'm having trouble reaching my knowledge base right now. 😅 Please <a href=\"" + CONTACT_URL + "\" target=\"_blank\" rel=\"noopener\">contact our team</a> directly — we'll get back to you quickly.", []);
