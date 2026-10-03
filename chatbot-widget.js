@@ -231,7 +231,8 @@ function comboBoost(key, qnorm) {
 function namedApps(qnorm) {
   var found = [];
   KNOWN_APPS.forEach(function (app) {
-    var variants = [app.replace(/-/g, " ")];
+    // hyphenated apps need all spellings: "e-conomic", "e conomic", "economic"
+    var variants = [app.replace(/-/g, " "), app.replace(/-/g, "")];
     var lbl = (APP_LABELS[app] || "").toLowerCase();
     if (lbl && variants.indexOf(lbl) === -1) variants.push(lbl);
     for (var i = 0; i < variants.length; i++) {
@@ -404,7 +405,7 @@ var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, e
   combosForApp: combosForApp, comboHasApp: comboHasApp, isGettingStarted: isGettingStarted,
   gettingStartedCard: gettingStartedCard, richAnswerHtml: richAnswerHtml,
   closingFor: closingFor, supportLine: supportLine, isTrouble: isTrouble,
-  isLinkRequest: isLinkRequest, linkReply: linkReply,
+  isLinkRequest: isLinkRequest, linkReply: linkReply, namedApps: namedApps,
   memoryFilter: memoryFilter, answerFromKB: answerFromKB, isVagueQuestion: isVagueQuestion,
   getActiveCombo: function () { return activeCombo; },
   setActiveCombo: function (c) { activeCombo = c; },
@@ -858,7 +859,10 @@ function answerFromKB(q, comboFilter, isMemory) {
   // with verified links (marketplace, video, trial); other combos keep the
   // specific docs answer
   var combo = comboFilter || comboOf(d.primary.chunk.url);
-  if (combo && COMBO_CARDS[combo] && isGettingStarted(q)) {
+  // rich "getting started" card for installation questions: curated links where we
+  // have them (marketplace, video, trial), otherwise the docs-derived setup guide
+  // + booking — every integration gets the full end-to-end card, not just HubSpot Xero
+  if (combo && isGettingStarted(q)) {
     var card = gettingStartedCard(combo);
     if (card.linkUrl) lastAnswer = { title: card.linkTitle, url: card.linkUrl };
     return card;
