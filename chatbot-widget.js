@@ -523,6 +523,13 @@ function intentReply(q) {
   var s = q.toLowerCase().trim();
   if (/^(hi|hii+|hello|hey|yo|namaste|good (morning|afternoon|evening))\b/.test(s) || s.length < 3 && /^(hi|hey)$/.test(s))
     return { text: "Hello! 👋 What would you like to know about our integrations?", chips: [] };
+  // one-word acknowledgments / replies — never search the KB for these, just respond naturally
+  if (/^(ok|okay|k|got it|understood|noted|alright|fine|cool|great|sure)[!. ]*$/.test(s))
+    return { text: "👍 Got it! I'm here if you need anything else.", chips: [] };
+  if (/^(yes|yeah|yep|yup)[!. ]*$/.test(s))
+    return { text: "Sure — what would you like to know? 🙂", chips: [] };
+  if (/^(no|nope|nah)[!. ]*$/.test(s))
+    return { text: "No problem at all! Feel free to come back anytime. 👋", chips: [] };
   if (/\b(thank|thanks|thx|dhanyavad)\b/.test(s))
     return { text: "You're very welcome! 😊 Anything else I can help with?", chips: CFG.chips };
   if (/\b(bye|goodbye|see you|good night)\b/.test(s))
