@@ -175,6 +175,19 @@ var APP_LABELS = {
   "danish-cvr": "Danish CVR", "company-vat": "Company VAT"
 };
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+/* Docs domain vocabulary for out-of-scope detection ("capital of France" names no
+ * app and has none of these words — it's not a Cloudify question at all). */
+var DOMAIN_WORDS = {setup:1, install:1, installation:1, configure:1, configuration:1,
+  invoice:1, invoices:1, invoicing:1, quote:1, quotes:1, sync:1, synced:1, syncing:1,
+  synchronise:1, synchronize:1, connect:1, connected:1, connecting:1, connection:1,
+  integration:1, integrations:1, integrate:1, app:1, apps:1, account:1, accounts:1,
+  subscription:1, subscriptions:1, trial:1, pricing:1, price:1, cost:1, billing:1,
+  cancel:1, cancellation:1, refund:1, support:1, error:1, errors:1, issue:1, issues:1,
+  problem:1, problems:1, failed:1, failure:1, troubleshooting:1, guide:1, documentation:1,
+  docs:1, workflow:1, workflows:1, customer:1, customers:1, product:1, products:1,
+  contact:1, contacts:1, deal:1, deals:1, payment:1, payments:1, tax:1, taxes:1,
+  mapping:1, mapped:1, field:1, fields:1, api:1, webhook:1, automate:1, automation:1,
+  manual:1, how:1, why:1};
 function isAppSeg(seg) {
   seg = (seg || "").toLowerCase();
   if (KNOWN_APPS.indexOf(seg) !== -1) return true; // full match first: "e-conomic", "danish-cvr"
@@ -775,6 +788,19 @@ function richAnswerHtml(d, q) {
   return html;
 }
 
+/* Out-of-scope detection: the question names no app and contains none of the docs
+ * domain vocabulary ("capital of France") — it's not a Cloudify question at all,
+ * so we decline politely instead of issuing a support ticket for it. */
+function isOutOfScope(q) {
+  var qnorm = (q || "").toLowerCase();
+  if (namedApps(qnorm).length > 0) return false;
+  var toks = tokenize(qnorm), i;
+  for (i = 0; i < toks.length; i++) {
+    if (DOMAIN_WORDS[toks[i]]) return false;
+  }
+  return true;
+};
+
 /* Vague-question detection: after stopwords and app names are removed, fewer than
  * two meaningful tokens remain (e.g. "Can you show me steps" -> just "steps").
  * Used so a vague follow-up in an established combo context gets a clarifying
@@ -837,6 +863,14 @@ function answerFromKB(q, comboFilter, isMemory) {
       // ticket a vague question — ask what they need. Memory stays set.
       return {
         html: "I want to point you to the right place — could you share a bit more detail about what you're trying to do? 🙂",
+        chips: []
+      };
+    }
+    if (isOutOfScope(q)) {
+      // Not a Cloudify question at all ("capital of France") — don't ticket it,
+      // just say what we're here for.
+      return {
+        html: "I'm the Cloudify docs assistant, so I can only help with our accounting integrations (setup, invoicing, syncing, troubleshooting). 🙂 What would you like to know about them?",
         chips: []
       };
     }
