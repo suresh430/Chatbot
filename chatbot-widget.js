@@ -306,7 +306,30 @@ function comboChips(keys) {
     labels.push(label);
     options[label] = key;
   });
+  // "Others" lets the visitor name an integration not in the listed combos
+  labels.push("Others");
+  options["Others"] = "__others__";
   return { labels: labels, options: options };
+}
+// Match free-typed app names ("HubSpot + QuickBooks") to a known combo key.
+// Returns the combo key, or null if nothing matches.
+function matchTypedCombo(text) {
+  if (!kbIndex || !kbIndex.combos) return null;
+  var qnorm = (text || "").toLowerCase().replace(/-/g, " ");
+  var apps = namedApps(qnorm);
+  if (!apps.length) return null;
+  var keys = Object.keys(kbIndex.combos), best = null, bestScore = 0, i, key, score;
+  for (i = 0; i < keys.length; i++) {
+    key = keys[i];
+    score = 0;
+    apps.forEach(function (app) { if (comboHasApp(key, app)) score++; });
+    // prefer the combo that matches ALL named apps; break ties by popularity
+    if (score > bestScore || (score === bestScore && score === apps.length && best && kbIndex.combos[key] > kbIndex.combos[best])) {
+      bestScore = score;
+      best = key;
+    }
+  }
+  return bestScore > 0 ? best : null;
 }
 function pageSteps(index, primary, maxSteps) {
   // steps for a rich answer: the primary chunk's page, in page order,
@@ -416,14 +439,14 @@ function isGettingStarted(q) {
 var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, expandQuery: expandQuery, goodMatch: goodMatch,
   comboOf: comboOf, comboLabel: comboLabel, namedApps: namedApps, comboBoost: comboBoost, decideAnswer: decideAnswer,
   combosForApp: combosForApp, comboHasApp: comboHasApp, isGettingStarted: isGettingStarted,
-  gettingStartedCard: gettingStartedCard, richAnswerHtml: richAnswerHtml,
+  gettingStartedCard: gettingStartedCard, richAnswerHtml: richAnswerHtml, matchTypedCombo: matchTypedCombo,
   closingFor: closingFor, supportLine: supportLine, isTrouble: isTrouble,
   isLinkRequest: isLinkRequest, linkReply: linkReply, namedApps: namedApps,
   memoryFilter: memoryFilter, answerFromKB: answerFromKB, isVagueQuestion: isVagueQuestion,
   getActiveCombo: function () { return activeCombo; },
   setActiveCombo: function (c) { activeCombo = c; },
   setKbIndex: function (idx) { kbIndex = idx; },
-  topCombos: topCombos, comboOrder: comboOrder,
+  topCombos: topCombos, comboOrder: comboOrder, comboChips: comboChips,
   correctSpelling: correctSpelling, cleanText: cleanText, editDistance: editDistance };
 if (typeof module !== "undefined" && module.exports) module.exports = ChatEngine;
 var comboIndexCache = {}; // lazily built per-combo search indexes
@@ -640,6 +663,7 @@ function escapeHtml(s) {
 
 /* ---------- chat behavior ---------- */
 var opened = false, kbIndex = null, kbMeta = null, kbFailed = false, pendingCombo = null, activeCombo = null;
+var awaitingCustomCombo = null; // original query saved when visitor clicks "Others" — waiting for them to type the app names
 var lastAnswer = null; // {title, url} of the most recent answer's primary source — for "do you have a link?" follow-ups
 // lazily built search index over a single combo's chunks (for picked integrations)
 function indexForCombo(combo) {
@@ -1021,9 +1045,30 @@ function handleUser(text) {
   // real question. Strip it and answer what they actually asked.
   var stripped = text.replace(/^(hi+|hello|hey|yo|namaste|good\s+(morning|afternoon|evening))[,!. ]+/i, "").trim();
   if (stripped) text = stripped;
+  if (awaitingCustomCombo) {
+    // visitor clicked "Others" and has now typed the app combo they need
+    var customQ = awaitingCustomCombo;
+    awaitingCustomCombo = null;
+    var customCombo = matchTypedCombo(text);
+    if (customCombo) {
+      activeCombo = customCombo; // remember the explicit choice even if this answer fails
+      var ca = answerFromKB(customQ, customCombo);
+      sayAnswer(ca);
+    } else {
+      botSay("Thanks! We don't have a documented integration for <b>" + escapeHtml(text) + "</b> yet. 🙂<br><br>Please <b>submit a support ticket</b> by emailing <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> — let our team know which apps you'd like connected and we'll take it from there. 🤝", []);
+    }
+    return;
+  }
   if (pendingCombo && pendingCombo.options[text]) {
     // visitor picked an integration from the disambiguation chips
     var key = pendingCombo.options[text], pq = pendingCombo.query;
+    if (key === "__others__") {
+      // "Others" — ask them to type the app combo they need
+      awaitingCustomCombo = pq;
+      pendingCombo = null;
+      botSay("Sure! Please type the names of the apps you'd like to connect — for example, <b>HubSpot + QuickBooks</b>. 🙂", []);
+      return;
+    }
     pendingCombo = null;
     activeCombo = key; // remember the explicit choice even if this answer fails
     var a = answerFromKB(pq, key);
