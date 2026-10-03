@@ -560,9 +560,21 @@ function isGettingStarted(q) {
   var toks = t ? t.split(" ").filter(function (w) { return w.length > 1; }) : [];
   return toks.length < 2;
 }
+// Just app names with no real question ("Shopify fortnox") — the visitor wants
+// the setup guide for that integration, not a docs search.
+function isJustAppNames(q) {
+  var s = (q || "").toLowerCase();
+  var apps = namedApps(s.replace(/-/g, " "));
+  if (!apps.length) return false;
+  var t = s.replace(/\b(hubspot|xero|shopify|woocommerce|pipedrive|fortnox|e-?conomic|pennylane|tripletex|exact|visma|dynamics|netsuite|sage|quickbooks|freshbooks|zoho|myob|stripe|shopi|msbc|flowlink)\b/g, " ")
+           .replace(/\b(how|to|do|does|can|could|i|we|you|the|a|an|my|our|me|please|need|want|with|for|is|are|it|hi|hello|hey)\b/g, " ")
+           .replace(/[^a-z0-9]+/g, " ").trim();
+  var toks = t ? t.split(" ").filter(function (w) { return w.length > 1; }) : [];
+  return toks.length === 0;
+}
 var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, expandQuery: expandQuery, goodMatch: goodMatch,
   comboOf: comboOf, comboLabel: comboLabel, namedApps: namedApps, comboBoost: comboBoost, decideAnswer: decideAnswer,
-  combosForApp: combosForApp, comboHasApp: comboHasApp, isGettingStarted: isGettingStarted,
+  combosForApp: combosForApp, comboHasApp: comboHasApp, isGettingStarted: isGettingStarted, isJustAppNames: isJustAppNames,
   gettingStartedCard: gettingStartedCard, richAnswerHtml: richAnswerHtml, matchTypedCombo: matchTypedCombo, customComboMessage: customComboMessage,
   closingFor: closingFor, supportLine: supportLine, isTrouble: isTrouble,
   isLinkRequest: isLinkRequest, linkReply: linkReply, namedApps: namedApps,
@@ -1067,7 +1079,7 @@ function answerFromKB(q, comboFilter, isMemory) {
   pendingCombo = null;
   var answeredCombo = memoryBypassed ? comboOf(results[0].chunk.url) : key;
   if (answeredCombo) activeCombo = answeredCombo;
-  if (isGettingStarted(q)) {
+  if (isGettingStarted(q) || isJustAppNames(q)) {
     var card = gettingStartedCard(key);
     if (card.linkUrl) lastAnswer = { title: card.linkTitle, url: card.linkUrl };
     return card;
