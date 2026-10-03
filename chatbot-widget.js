@@ -345,6 +345,18 @@ function comboChips(keys) {
   options["Others"] = "__others__";
   return { labels: labels, options: options };
 }
+// Friendly message for app combos we don't have: acknowledges what they want,
+// then guides them to custom integration services.
+function customComboMessage(rawText) {
+  var apps = namedApps((rawText || "").toLowerCase().replace(/-/g, " "));
+  var name = apps.length
+    ? apps.map(function (a) { return prettySeg(a); }).join(" + ")
+    : escapeHtml(rawText);
+  return "Got it! " + name + " — nice combination! 😊<br><br>" +
+    "If you're looking to connect these apps, we can help you set up a custom integration based on what you need.<br><br>" +
+    "👉 <a href=\"https://custom.cloudify.biz\" target=\"_blank\" rel=\"noopener\">Get a Custom Integration: custom.cloudify.biz</a><br>" +
+    "📩 <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> — our team will be happy to help! 🤝";
+}
 // Match free-typed app names ("HubSpot + QuickBooks") to a known combo key.
 // Returns the combo key, or null if nothing matches.
 // When 2+ apps are named, ALL must be in the combo — a partial match (e.g.
@@ -489,7 +501,7 @@ function isGettingStarted(q) {
 var ChatEngine = { tokenize: tokenize, buildIndex: buildIndex, search: search, expandQuery: expandQuery, goodMatch: goodMatch,
   comboOf: comboOf, comboLabel: comboLabel, namedApps: namedApps, comboBoost: comboBoost, decideAnswer: decideAnswer,
   combosForApp: combosForApp, comboHasApp: comboHasApp, isGettingStarted: isGettingStarted,
-  gettingStartedCard: gettingStartedCard, richAnswerHtml: richAnswerHtml, matchTypedCombo: matchTypedCombo,
+  gettingStartedCard: gettingStartedCard, richAnswerHtml: richAnswerHtml, matchTypedCombo: matchTypedCombo, customComboMessage: customComboMessage,
   closingFor: closingFor, supportLine: supportLine, isTrouble: isTrouble,
   isLinkRequest: isLinkRequest, linkReply: linkReply, namedApps: namedApps,
   memoryFilter: memoryFilter, answerFromKB: answerFromKB, isVagueQuestion: isVagueQuestion,
@@ -942,10 +954,7 @@ function answerFromKB(q, comboFilter, isMemory) {
     // visitor named 2+ apps but no combo has all of them — this integration
     // doesn't exist. Point to custom integration services, don't guess.
     pendingCombo = null;
-    return {
-      html: "This app combo needs our custom integration services. 🙂<br><br>Please check <a href=\"https://custom.cloudify.biz\" target=\"_blank\" rel=\"noopener\">custom.cloudify.biz</a> — or email <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> and our team will help you out. 🤝",
-      chips: []
-    };
+    return { html: customComboMessage(q), chips: [] };
   }
   if (d.type === "fallback") {
     pendingCombo = null;
@@ -1114,7 +1123,7 @@ function handleUser(text) {
       var ca = answerFromKB(customQ, customCombo);
       sayAnswer(ca);
     } else {
-      botSay("Thanks! We don't have a documented integration for <b>" + escapeHtml(text) + "</b> yet. 🙂<br><br>For a custom integration, please check <a href=\"https://custom.cloudify.biz\" target=\"_blank\" rel=\"noopener\">custom.cloudify.biz</a> — or email <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> and our team will help you out. 🤝", []);
+      botSay(customComboMessage(text), []);
     }
     return;
   }
