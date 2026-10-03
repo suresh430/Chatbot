@@ -890,6 +890,15 @@ function answerFromKB(q, comboFilter, isMemory) {
   if (d.type === "disambiguate") {
     // ask which integration they mean; the question is kept so the picked
     // combo answers it
+    if (isMemory && isVagueQuestion(q)) {
+      // In an established combo context, a vague question ("show me steps")
+      // should ask for detail, not re-ask which integration — memory stays set.
+      pendingCombo = null;
+      return {
+        html: "I want to point you to the right place — could you share a bit more detail about what you're trying to do? 🙂",
+        chips: []
+      };
+    }
     pendingCombo = { query: q, options: d.options };
     return { html: d.html, chips: d.labels };
   }
