@@ -1165,14 +1165,22 @@ function loadTesseract(cb) {
   s.onerror = function () { cb(new Error("load failed")); };
   document.head.appendChild(s);
 }
-// Run OCR on an image element, return extracted text via callback
+// Run OCR on an image element, return extracted text via callback.
+// Small screenshots are upscaled 2x first — Tesseract reads tiny text poorly.
 function ocrImage(imgEl, cb) {
   loadTesseract(function (err) {
     if (err) { cb(null); return; }
     (async function () {
       try {
+        var src = imgEl;
+        if (imgEl.naturalWidth && imgEl.naturalWidth < 1000) {
+          var c = document.createElement("canvas");
+          c.width = imgEl.naturalWidth * 2; c.height = imgEl.naturalHeight * 2;
+          c.getContext("2d").drawImage(imgEl, 0, 0, c.width, c.height);
+          src = c;
+        }
         var worker = await window.Tesseract.createWorker("eng");
-        var res = await worker.recognize(imgEl);
+        var res = await worker.recognize(src);
         await worker.terminate();
         var t = (res && res.data && res.data.text ? res.data.text : "").replace(/\s+/g, " ").trim();
         cb(t.length > 10 ? t : null);
@@ -1190,8 +1198,20 @@ function answerScreenshot(ocrText, question) {
   apps = apps.filter(function (a, i) { return apps.indexOf(a) === i; });
 
   if (!apps.length) {
+    // No app names recognized — the screenshot may still show a Cloudify error
+    // or settings page. Try the docs search on the extracted text before giving up.
     pendingImageText = null;
-    botSay("I looked at your screenshot, but I couldn't spot any of our supported apps in it. Please upload a screenshot related to one of our supported apps (HubSpot, Xero, Pipedrive, Shopify, Fortnox, e-conomic, and more). 🙂", []);
+    pendingCombo = null;
+    var qf = "The visitor uploaded a screenshot. Visible text: \"" + ocrText.slice(0, 1500) + "\". " +
+      (question ? "They ask: " + question : "This looks like a Cloudify error or settings page — give the most relevant help from the docs.");
+    var af = answerFromKB(qf, null, false);
+    if (af && af.html.indexOf("point you to the right place") !== -1) {
+      // Pipeline couldn't help either — screenshot truly not relevant
+      pendingCombo = null;
+      botSay("I looked at your screenshot, but I couldn't spot any of our supported apps in it. Please upload a screenshot related to one of our supported apps (HubSpot, Xero, Pipedrive, Shopify, Fortnox, e-conomic, and more). 🙂", []);
+    } else {
+      sayAnswer(af); // docs had an answer, or disambiguation chips to pick from
+    }
     return;
   }
 
