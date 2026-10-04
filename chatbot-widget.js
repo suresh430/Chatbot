@@ -649,6 +649,101 @@ var CFG = {
   chips:    userCfg.chips    || []
 };
 
+/* ---------- chat history + analytics ----------
+ * Anonymous, privacy-first logging to the Cloudify backend (Cloudflare D1).
+ * - user_id: random UUID in localStorage (identifies returning visitors)
+ * - chat_id: new random UUID per widget session
+ * - message_id: random UUID per message
+ * No IPs, no PII. Logging is fire-and-forget (keepalive) — never blocks chat UX.
+ * Metadata about the next bot message (source/flagged) travels via pendingBotMeta. */
+var pendingBotMeta = null;
+function uuid4() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+    var r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+var Analytics = (function () {
+  var chatId = uuid4(), userId = null, queue = [], flushTimer = null, lastUserTs = 0;
+  try {
+    userId = localStorage.getItem("cfb_user_id");
+    if (!/^[0-9a-f-]{36}$/i.test(userId || "")) userId = null;
+  } catch (e) { /* storage unavailable — treat as new user each load */ }
+  if (!userId) {
+    userId = uuid4();
+    try { localStorage.setItem("cfb_user_id", userId); } catch (e) {}
+  }
+  function deviceInfo() {
+    var ua = navigator.userAgent || "";
+    var tablet = /iPad|Tablet/i.test(ua) && !/Mobi/i.test(ua);
+    var mobile = /Mobi|Android|iPhone|iPod/i.test(ua);
+    var browser = /Edg\//i.test(ua) ? "edge" : /OPR\//i.test(ua) ? "opera"
+      : /Chrome\//i.test(ua) ? "chrome" : /Firefox\//i.test(ua) ? "firefox"
+      : /Safari\//i.test(ua) ? "safari" : "other";
+    var os = /Android/i.test(ua) ? "android" : /iPhone|iPad|iPod/i.test(ua) ? "ios"
+      : /Windows/i.test(ua) ? "windows" : /Mac OS/i.test(ua) ? "macos"
+      : /Linux/i.test(ua) ? "linux" : "other";
+    return { device_type: tablet ? "tablet" : (mobile ? "mobile" : "desktop"), browser: browser, os: os };
+  }
+  var dinfo = deviceInfo();
+  function stripHtml(html) {
+    var d = document.createElement("div");
+    d.innerHTML = html || "";
+    return (d.textContent || "").replace(/\s+/g, " ").trim();
+  }
+  function log(role, html) {
+    if (!CFG.rewriteUrl) return; // no backend configured — skip silently
+    var text;
+    if (html.indexOf("cfb-attachment") !== -1) {
+      text = "[screenshot uploaded: " + stripHtml(html).slice(0, 100) + "]";
+    } else {
+      text = stripHtml(html);
+    }
+    if (!text || text.indexOf("⏳") !== -1) return; // skip transient progress notes
+    var now = Date.now(), meta = {};
+    if (role === "user") {
+      lastUserTs = now;
+    } else {
+      meta = pendingBotMeta || {};
+      pendingBotMeta = null;
+      if (lastUserTs && now - lastUserTs < 300000) meta.responseMs = now - lastUserTs;
+      // heuristic: ticket deflections and "can't help" replies are poor responses
+      if (/submit a support ticket|book a support call/i.test(text) && !/additionally|also/i.test(text)) meta.flagged = true;
+      else if (/couldn'?t (find|spot|make out)|i don'?t have|not sure/i.test(text)) meta.flagged = true;
+    }
+    queue.push({
+      message_id: uuid4(), role: role, text: text.slice(0, 5000), created_at: now,
+      response_ms: meta.responseMs || null, source: meta.source || null,
+      flagged: meta.flagged ? 1 : 0
+    });
+    if (!flushTimer) flushTimer = setTimeout(flush, 2000);
+  }
+  function flush() {
+    flushTimer = null;
+    if (!queue.length || !CFG.rewriteUrl) return;
+    var batch = queue.splice(0, queue.length);
+    try {
+      fetch(CFG.rewriteUrl.replace(/\/$/, "") + "/log", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user: { user_id: userId, device_type: dinfo.device_type, browser: dinfo.browser, os: dinfo.os },
+          conversation: { chat_id: chatId, page_url: (location.href || "").slice(0, 300) },
+          messages: batch
+        }),
+        keepalive: true
+      }).catch(function () { /* logging must never break chat */ });
+    } catch (e) {}
+  }
+  if (window.addEventListener) {
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") flush();
+    });
+  }
+  return { log: log, flush: flush };
+})();
+
 // shortest installation/getting-started docs URL for a combo
 function setupGuideUrl(combo, idx) {
   var curated = COMBO_CARDS[combo] && COMBO_CARDS[combo].setupGuide;
@@ -817,6 +912,10 @@ function addMsg(cls, html) {
   var m = el('<div class="cfb-msg ' + cls + '">' + html + "</div>");
   body.appendChild(m);
   scrollDown();
+  try {
+    if (cls === "cfb-user") Analytics.log("user", html);
+    else if (cls === "cfb-bot" && html.indexOf("cfb-typing") === -1) Analytics.log("bot", html);
+  } catch (e) {}
   return m;
 }
 function addChips(list) {
@@ -1120,7 +1219,7 @@ function rewriteAnswer(a) {
     addMsg("cfb-bot", html);
     addChips(a.chips);
   }
-  function fallback() { finish(a.html); }
+  function fallback() { pendingBotMeta = { source: "fallback" }; finish(a.html); }
   if (ctrl) { timer = setTimeout(function () { try { ctrl.abort(); } catch (e) {} fallback(); }, 45000); }
   var payload = {
     question: a.rewrite.question,
@@ -1135,7 +1234,7 @@ function rewriteAnswer(a) {
   }).then(function (data) {
     if (!data || !data.html) throw new Error("empty");
     // ticket-only replies stay bare, exactly as the visitor should see them
-    if (/support ticket/i.test(data.html)) { finish(sanitizeHtml(data.html)); return; }
+    if (/support ticket/i.test(data.html)) { pendingBotMeta = { source: "ai", flagged: true }; finish(sanitizeHtml(data.html)); return; }
     var src = { url: a.rewrite.primaryUrl, title: a.rewrite.primaryTitle };
     var htmlOut = sanitizeHtml(data.html) + "<br>" + srcLink(src) +
       "<br><br>" + supportLine(a.rewrite.question) +
@@ -1146,6 +1245,7 @@ function rewriteAnswer(a) {
 }
 // display an answer, using the AI rewrite when configured and applicable
 function sayAnswer(a) {
+  pendingBotMeta = { source: (a.rewrite && CFG.rewriteUrl) ? "ai" : "docs" };
   if (a.rewrite && CFG.rewriteUrl) { rewriteAnswer(a); return; }
   botSay(a.html, a.chips);
 }
@@ -1199,11 +1299,14 @@ function askExplain(ocrText, app, question) {
   }).then(function (r) { return r.json(); })
   .then(function (data) {
     if (data && data.html) {
+      pendingBotMeta = { source: "explain" };
       botSay(sanitizeHtml(data.html) + "<br><br>" + supportLine(question || "screenshot error"), []);
     } else {
+      pendingBotMeta = { source: "explain", flagged: true };
       botSay("I couldn't find docs on this specific error. Please email the screenshot to <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> and our team will help. 🙂", []);
     }
   }).catch(function () {
+    pendingBotMeta = { source: "explain", flagged: true };
     botSay("I couldn't find docs on this specific error. Please email the screenshot to <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> and our team will help. 🙂", []);
   });
 }

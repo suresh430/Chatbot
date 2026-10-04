@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cloudify Chatbot — Analytics</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root { --blue: #1d4ed8; --bg: #f3f4f6; --card: #fff; --text: #111827; --muted: #6b7280; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { background: var(--blue); color: #fff; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+  header h1 { font-size: 20px; }
+  header .range select { padding: 6px 10px; border-radius: 6px; border: none; font-size: 14px; }
+  .tabs { display: flex; gap: 8px; padding: 16px 24px 0; flex-wrap: wrap; }
+  .tab { padding: 10px 18px; border-radius: 8px 8px 0 0; background: #e5e7eb; border: none; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--muted); }
+  .tab.active { background: var(--card); color: var(--blue); }
+  main { padding: 0 24px 40px; }
+  .panel { display: none; background: var(--card); border-radius: 0 8px 8px 8px; padding: 24px; }
+  .panel.active { display: block; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card { background: var(--bg); border-radius: 10px; padding: 18px; }
+  .card .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+  .card .value { font-size: 28px; font-weight: 700; }
+  .card .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
+  .chart-box { background: var(--bg); border-radius: 10px; padding: 18px; }
+  .chart-box h3 { font-size: 15px; margin-bottom: 12px; }
+  .chart-box canvas { max-height: 280px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #e5e7eb; }
+  th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
+  tr:hover td { background: #f9fafb; }
+  .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  .btn { background: var(--blue); color: #fff; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .btn.danger { background: #dc2626; }
+  .btn.small { padding: 4px 10px; font-size: 12px; }
+  .search { display: flex; gap: 8px; margin-bottom: 16px; }
+  .search input { flex: 1; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge.user { background: #dbeafe; color: #1d4ed8; }
+  .badge.bot { background: #e9d5ff; color: #7c3aed; }
+  .badge.flag { background: #fee2e2; color: #dc2626; }
+  #login { max-width: 400px; margin: 100px auto; background: var(--card); padding: 32px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,.08); }
+  #login h2 { margin-bottom: 8px; }
+  #login p { color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+  #login input { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; margin-bottom: 12px; font-size: 14px; }
+  #login .btn { width: 100%; padding: 10px; }
+  #login .err { color: #dc2626; font-size: 13px; margin-top: 8px; display: none; }
+  #app { display: none; }
+  .conv-view { background: var(--bg); border-radius: 10px; padding: 18px; margin-top: 16px; max-height: 500px; overflow-y: auto; }
+  .msg { margin-bottom: 12px; max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; }
+  .msg.u { background: #dbeafe; margin-left: auto; }
+  .msg.b { background: #fff; border: 1px solid #e5e7eb; }
+  .msg .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .hidden { display: none !important; }
+  .pager { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h2>📊 Chatbot Analytics</h2>
+  <p>Enter your admin token to view the dashboard.</p>
+  <input type="password" id="token" placeholder="Admin token" autocomplete="off">
+  <button class="btn" onclick="doLogin()">Sign in</button>
+  <div class="err" id="loginErr">Invalid token. Please try again.</div>
+</div>
+
+<div id="app">
+  <header>
+    <h1>📊 Cloudify Chatbot Analytics</h1>
+    <div class="range">
+      <select id="days" onchange="loadAll()">
+        <option value="7">Last 7 days</option>
+        <option value="30" selected>Last 30 days</option>
+        <option value="90">Last 90 days</option>
+      </select>
+    </div>
+  </header>
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('overview')">Overview</button>
+    <button class="tab" onclick="showTab('conversations')">Conversations</button>
+    <button class="tab" onclick="showTab('questions')">Top Questions</button>
+    <button class="tab" onclick="showTab('failed')">Failed Responses</button>
+  </div>
+  <main>
+    <div class="panel active" id="tab-overview">
+      <div class="cards" id="statCards"></div>
+      <div class="grid2">
+        <div class="chart-box"><h3>Chats, messages & users over time</h3><canvas id="chTrend"></canvas></div>
+        <div class="chart-box"><h3>Users by country</h3><canvas id="chCountry"></canvas></div>
+      </div>
+      <div class="grid2">
+        <div class="chart-box"><h3>Device type</h3><canvas id="chDevice"></canvas></div>
+        <div class="chart-box"><h3>Browser</h3><canvas id="chBrowser"></canvas></div>
+      </div>
+    </div>
+    <div class="panel" id="tab-conversations">
+      <div class="search">
+        <input id="convSearch" placeholder="Search by Chat ID…" onkeydown="if(event.key==='Enter')loadConversations(0)">
+        <button class="btn" onclick="loadConversations(0)">Search</button>
+      </div>
+      <div id="convList"></div>
+      <div class="pager" id="convPager"></div>
+      <div id="convDetail"></div>
+    </div>
+    <div class="panel" id="tab-questions">
+      <div id="qList"></div>
+    </div>
+    <div class="panel" id="tab-failed">
+      <div id="failList"></div>
+    </div>
+  </main>
+</div>
+
+<script>
+// Set this to your Worker URL (same as the widget's rewrite URL)
+var API = "https://cloudify-chatbot-rewrite.sureshb5157.workers.dev";
+var token = sessionStorage.getItem("cfb_admin_token") || "";
+var charts = {};
+var convOffset = 0, convTotal = 0;
+var PAGE = 20;
+
+function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({ "Authorization": "Bearer " + token }, opts.headers || {});
+  return fetch(API + path, opts).then(function (r) {
+    if (r.status === 401) { sessionStorage.removeItem("cfb_admin_token"); location.reload(); throw new Error("unauthorized"); }
+    return r.json();
+  });
+}
+function doLogin() {
+  token = document.getElementById("token").value.trim();
+  sessionStorage.setItem("cfb_admin_token", token);
+  api("/admin/stats?days=1").then(function (d) {
+    if (d && d.ok) { document.getElementById("login").style.display = "none"; document.getElementById("app").style.display = "block"; loadAll(); }
+    else throw new Error();
+  }).catch(function () {
+    document.getElementById("loginErr").style.display = "block";
+    sessionStorage.removeItem("cfb_admin_token"); token = "";
+  });
+}
+if (token) { document.getElementById("login").style.display = "none"; document.getElementById("app").style.display = "block"; }
+function showTab(name) {
+  document.querySelectorAll(".tab").forEach(function (t) { t.classList.remove("active"); });
+  document.querySelectorAll(".panel").forEach(function (p) { p.classList.remove("active"); });
+  event.target.classList.add("active");
+  document.getElementById("tab-" + name).classList.add("active");
+  if (name === "conversations") loadConversations(0);
+  if (name === "questions") loadQuestions();
+  if (name === "failed") loadFailed();
+}
+function days() { return document.getElementById("days").value; }
+function fmtDate(ms) { return new Date(ms).toLocaleString(); }
+function fmtDur(ms) {
+  if (!ms) return "—";
+  var s = Math.round(ms / 1000);
+  if (s < 60) return s + "s";
+  return Math.floor(s / 60) + "m " + (s % 60) + "s";
+}
+function esc(s) { return (s || "").toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").slice(0, 500); }
+
+function loadAll() {
+  var d = days();
+  api("/admin/stats?days=" + d).then(renderStats);
+  api("/admin/timeseries?days=" + d).then(renderTrend);
+  api("/admin/countries?days=" + d).then(renderCountries);
+  api("/admin/devices?days=" + d).then(renderDevices);
+}
+function renderStats(d) {
+  var s = d.stats || {};
+  function card(label, value, sub) {
+    return '<div class="card"><div class="label">' + label + '</div><div class="value">' + value + '</div>' + (sub ? '<div class="sub">' + sub + '</div>' : '') + '</div>';
+  }
+  document.getElementById("statCards").innerHTML =
+    card("Active users", s.active_users || 0, (s.new_users || 0) + " new · " + (s.returning_users || 0) + " returning") +
+    card("Total chats", s.total_chats || 0) +
+    card("Total messages", s.total_messages || 0) +
+    card("Avg msgs / chat", (s.avg_msgs_per_chat || 0).toFixed(1)) +
+    card("Avg duration", fmtDur(s.avg_duration_ms)) +
+    card("DAU / WAU / MAU", (s.dau || 0) + " / " + (s.wau || 0) + " / " + (s.mau || 0)) +
+    card("Failed responses", s.failed_responses || 0, "needs review → Failed tab");
+}
+function mkChart(id, cfg) {
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), cfg);
+}
+function renderTrend(d) {
+  var rows = d.series || [];
+  mkChart("chTrend", { type: "line",
+    data: { labels: rows.map(function (r) { return r.d; }),
+      datasets: [
+        { label: "Chats", data: rows.map(function (r) { return r.chats; }), borderColor: "#1d4ed8", tension: .3 },
+        { label: "Messages", data: rows.map(function (r) { return r.messages; }), borderColor: "#7c3aed", tension: .3 },
+        { label: "Users", data: rows.map(function (r) { return r.users; }), borderColor: "#059669", tension: .3 }
+      ] },
+    options: { responsive: true, plugins: { legend: { position: "bottom" } } } });
+}
+function renderCountries(d) {
+  var rows = (d.countries || []).slice(0, 10);
+  mkChart("chCountry", { type: "bar",
+    data: { labels: rows.map(function (r) { return r.country; }), datasets: [{ data: rows.map(function (r) { return r.users; }), backgroundColor: "#1d4ed8" }] },
+    options: { responsive: true, plugins: { legend: { display: false } } } });
+}
+function renderDevices(d) {
+  function pie(id, rows) {
+    mkChart(id, { type: "doughnut",
+      data: { labels: rows.map(function (r) { return r.k; }), datasets: [{ data: rows.map(function (r) { return r.n; }),
+        backgroundColor: ["#1d4ed8", "#7c3aed", "#059669", "#d97706", "#dc2626", "#6b7280"] }] },
+      options: { responsive: true, plugins: { legend: { position: "bottom" } } } });
+  }
+  pie("chDevice", d.device_types || []);
+  pie("chBrowser", d.browsers || []);
+}
+
+function loadConversations(offset) {
+  convOffset = offset;
+  var q = document.getElementById("convSearch").value.trim();
+  api("/admin/conversations?days=" + days() + "&limit=" + PAGE + "&offset=" + offset + "&q=" + encodeURIComponent(q)).then(function (d) {
+    convTotal = d.total || 0;
+    var html = '<table><tr><th>Chat ID</th><th>Started</th><th>Msgs</th><th>Duration</th><th>First question</th><th></th></tr>';
+    (d.conversations || []).forEach(function (c) {
+      html += "<tr><td class='mono'>" + esc(c.chat_id.slice(0, 8)) + "…</td><td>" + fmtDate(c.started_at) + "</td><td>" + c.message_count + "</td><td>" + fmtDur(c.duration_ms) + "</td><td>" + esc(c.first_question) + "</td>" +
+        "<td><button class='btn small' onclick=\"viewConversation('" + c.chat_id + "')\">View</button> " +
+        "<button class='btn small danger' onclick=\"delConversation('" + c.chat_id + "')\">Delete</button></td></tr>";
+    });
+    html += "</table>";
+    document.getElementById("convList").innerHTML = html;
+    document.getElementById("convPager").innerHTML =
+      "<button class='btn small' " + (offset <= 0 ? "disabled" : "") + " onclick='loadConversations(" + (offset - PAGE) + ")'>← Prev</button>" +
+      "<span>" + (offset + 1) + "–" + Math.min(offset + PAGE, convTotal) + " of " + convTotal + "</span>" +
+      "<button class='btn small' " + (offset + PAGE >= convTotal ? "disabled" : "") + " onclick='loadConversations(" + (offset + PAGE) + ")'>Next →</button>";
+    document.getElementById("convDetail").innerHTML = "";
+  });
+}
+function viewConversation(chatId) {
+  api("/admin/conversation?chat_id=" + chatId).then(function (d) {
+    var html = "<div class='conv-view'><h3 style='margin-bottom:12px'>Chat <span class='mono'>" + esc(chatId) + "</span> " +
+      "<button class='btn small danger' style='float:right' onclick=\"document.getElementById('convDetail').innerHTML='';loadConversations(convOffset)\">Close</button></h3>";
+    (d.messages || []).forEach(function (m) {
+      html += "<div class='msg " + (m.role === "user" ? "u" : "b") + "'><span class='badge " + (m.role === "user" ? "user" : "bot") + "'>" + m.role + "</span>" +
+        (m.flagged ? " <span class='badge flag'>flagged</span>" : "") +
+        "<div style='margin-top:6px'>" + esc(m.text) + "</div>" +
+        "<div class='meta'>" + fmtDate(m.created_at) + (m.source ? " · " + esc(m.source) : "") + (m.response_ms ? " · " + (m.response_ms / 1000).toFixed(1) + "s" : "") + "</div></div>";
+    });
+    html += "</div>";
+    document.getElementById("convDetail").innerHTML = html;
+    document.getElementById("convDetail").scrollIntoView();
+  });
+}
+function delConversation(chatId) {
+  if (!confirm("Delete this conversation and all its messages?")) return;
+  api("/admin/delete-conversation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: chatId }) })
+    .then(function () { loadConversations(convOffset); });
+}
+function loadQuestions() {
+  api("/admin/questions?days=" + days() + "&limit=30").then(function (d) {
+    var html = "<table><tr><th>#</th><th>Question</th><th>Times asked</th><th>Chats</th></tr>";
+    (d.questions || []).forEach(function (q, i) {
+      html += "<tr><td>" + (i + 1) + "</td><td>" + esc(q.q) + "</td><td>" + q.n + "</td><td>" + q.chats + "</td></tr>";
+    });
+    document.getElementById("qList").innerHTML = html + "</table>";
+  });
+}
+function loadFailed() {
+  api("/admin/failed?days=" + days() + "&limit=50").then(function (d) {
+    var html = "<table><tr><th>Time</th><th>Bot response</th><th>Source</th><th>Chat</th></tr>";
+    (d.failed || []).forEach(function (f) {
+      html += "<tr><td>" + fmtDate(f.created_at) + "</td><td>" + esc(f.text) + "</td><td>" + esc(f.source) + "</td>" +
+        "<td><button class='btn small' onclick=\"showTab('conversations');document.getElementById('convSearch').value='" + f.chat_id + "';loadConversations(0)\">Open chat</button></td></tr>";
+    });
+    document.getElementById("failList").innerHTML = html + "</table>";
+  });
+}
+if (token) loadAll();
+document.getElementById("token").addEventListener("keydown", function (e) { if (e.key === "Enter") doLogin(); });
+</script>
+</body>
+</html>
