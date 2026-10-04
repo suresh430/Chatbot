@@ -460,7 +460,9 @@ function resolveCombo(q, opts) {
     var app = named[0];
     // In memory context, if the named app is part of the remembered combo,
     // stay in context (vague → clarify, specific → answer).
+    // A setup request is never vague — it wants the setup guide for this integration.
     if (opts.activeCombo && comboHasApp(opts.activeCombo, app)) {
+      if (isGettingStarted(q)) return { type: "combo", key: opts.activeCombo };
       if (isVagueQuestion(q)) return { type: "clarify" };
       return { type: "combo", key: opts.activeCombo };
     }
@@ -470,6 +472,7 @@ function resolveCombo(q, opts) {
 
   // 4. No apps named.
   if (opts.activeCombo) {
+    if (isGettingStarted(q)) return { type: "combo", key: opts.activeCombo };
     if (isVagueQuestion(q)) return { type: "clarify" };
     return { type: "combo", key: opts.activeCombo };
   }
@@ -1130,6 +1133,17 @@ function answerFromKB(q, comboFilter, isMemory) {
 
   // --- res.type === "combo": search within the combo's docs ---
   var key = res.key;
+  // Setup intent — show the end-to-end setup card directly. No docs search
+  // needed: the card is built from curated links + install guides. This keeps
+  // "help me to setup" from falling through to ticket when the vague query
+  // matches no docs.
+  if (isGettingStarted(q) || isJustAppNames(q)) {
+    var gcard = gettingStartedCard(key);
+    if (gcard.linkUrl) lastAnswer = { title: gcard.linkTitle, url: gcard.linkUrl };
+    activeCombo = key;
+    pendingCombo = null;
+    return gcard;
+  }
   var index = indexForCombo(key);
   if (!index) {
     pendingCombo = null;
