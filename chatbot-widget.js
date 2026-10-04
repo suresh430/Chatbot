@@ -91,12 +91,14 @@ function editDistance(a, b, maxEd) {
 }
 // fix a misspelled query word ("reccuring" -> "recurring") using the KB vocabulary
 function correctSpelling(index, tok) {
-  if (index.idf[tok] || tok.length < 4) return tok;
+  if (index.idf[tok] || tok.length < 3) return tok;
   var maxEd = tok.length >= 7 ? 2 : 1;
   var terms = Object.keys(index.idf), best = null, bestEd = maxEd + 1, bestDf = -1, i, t, ed, df;
   for (i = 0; i < terms.length; i++) {
     t = terms[i];
     if (t.length < 4 || Math.abs(t.length - tok.length) > maxEd) continue;
+    // 3-char tokens only correct to a term exactly one char longer ("xer" → "xero")
+    if (tok.length < 4 && t.length !== tok.length + 1) continue;
     if (t.charAt(0) !== tok.charAt(0)) continue;
     ed = editDistance(tok, t, maxEd);
     if (ed <= maxEd) {
@@ -280,12 +282,15 @@ function namedApps(qnorm) {
       // no exact hit — try typo tolerance on each unclaimed query token
       for (var t = 0; t < toks.length && !matched; t++) {
         var tok = toks[t];
-        if (tok.length < 4 || claimed[tok]) continue;
+        if (tok.length < 3 || claimed[tok]) continue;
         for (var v = 0; v < variants.length && !matched; v++) {
           var variant = variants[v].replace(/ /g, "");
           if (variant.length < 4 || tok.charAt(0) !== variant.charAt(0)) continue;
           var maxEd = tok.length >= 7 ? 2 : 1;
           if (Math.abs(tok.length - variant.length) > maxEd) continue;
+          // 3-char tokens only match a variant exactly one char longer
+          // ("xer" → "xero") — avoids false positives on common short words.
+          if (tok.length < 4 && variant.length !== tok.length + 1) continue;
           if (editDistance(tok, variant, maxEd) <= maxEd) matched = true;
         }
       }
