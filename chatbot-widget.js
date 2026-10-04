@@ -1233,17 +1233,32 @@ function answerScreenshot(ocrText, question) {
     if (question) {
       // Visitor asked a follow-up about the screenshot — try each of this app's
       // integrations for a docs answer before asking them to pick one.
+      // Use a clean query (OCR error text + question) so the search isn't diluted
+      // by wrapper words, and require the docs to actually mention the error.
+      var searchQ = ocrText.slice(0, 600) + " " + question;
+      var errWords = ocrText.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(" ")
+        .filter(function (w) { return w.length > 5 && ["screenshot", "visible", "visitor", "uploaded", "about", "which", "there", "their"].indexOf(w) === -1; });
       for (var i = 0; i < pkeys.length; i++) {
         pendingCombo = null;
-        var ta = answerFromKB(pq, pkeys[i], false);
+        var ta = answerFromKB(searchQ, pkeys[i], false);
         if (ta && ta.html && ta.html.indexOf("submit a support ticket") === -1 &&
             ta.html.indexOf("point you to the right place") === -1) {
-          // Show the deterministic docs answer directly: the Worker rewrite would
-          // ticket-deflect when docs describe the error without a full solution,
-          // but the docs content itself is what the visitor needs to see.
-          delete ta.rewrite;
-          sayAnswer(ta); // found docs — answer directly
-          return;
+          // Relevance check: docs must mention the error or distinctive OCR words,
+          // otherwise it's a weak match (e.g. subscription plans for an error question)
+          var h = ta.html.toLowerCase();
+          var mentionsError = h.indexOf("error") !== -1 || h.indexOf("troubleshoot") !== -1 || h.indexOf("failed") !== -1;
+          var overlap = 0;
+          for (var j = 0; j < errWords.length; j++) {
+            if (h.indexOf(errWords[j]) !== -1) { overlap++; if (overlap >= 2) break; }
+          }
+          if (mentionsError || overlap >= 2) {
+            // Show the deterministic docs answer directly: the Worker rewrite would
+            // ticket-deflect when docs describe the error without a full solution,
+            // but the docs content itself is what the visitor needs to see.
+            delete ta.rewrite;
+            sayAnswer(ta); // found relevant docs — answer directly
+            return;
+          }
         }
       }
       pendingCombo = null;
