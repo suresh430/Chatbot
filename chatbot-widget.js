@@ -1180,13 +1180,48 @@ function ocrImage(imgEl, cb) {
     })();
   });
 }
-// Answer a screenshot: OCR text + optional question through the normal pipeline
+// Answer a screenshot: analyze OCR text, identify the app, then answer.
+// - No supported apps in the screenshot → ask for a relevant screenshot.
+// - Apps resolve to one combo → answer directly for that integration.
+// - One app, several integrations → show what was found, then ask which one.
+// - Never asks "which integration?" without first showing the analysis.
 function answerScreenshot(ocrText, question) {
-  var q = "The visitor uploaded a screenshot showing this text: \"" +
-    ocrText.slice(0, 1500) + "\"." +
-    (question ? " They ask: " + question : " Describe what it shows and offer the most relevant help.");
-  var a = answerFromKB(q, null, false);
-  sayAnswer(a);
+  var apps = namedApps(ocrText.toLowerCase());
+  apps = apps.filter(function (a, i) { return apps.indexOf(a) === i; });
+
+  if (!apps.length) {
+    pendingImageText = null;
+    botSay("I looked at your screenshot, but I couldn't spot any of our supported apps in it. Please upload a screenshot related to one of our supported apps (HubSpot, Xero, Pipedrive, Shopify, Fortnox, e-conomic, and more). 🙂", []);
+    return;
+  }
+
+  var res = resolveCombo(apps.join(" "), {});
+  var seen = "The visitor uploaded a screenshot. Visible text: \"" + ocrText.slice(0, 1500) + "\".";
+
+  if (res.type === "combo") {
+    // Screenshot identifies one integration — answer directly, no manual pick needed
+    var q = "Screenshot analysis: this is about the " + comboLabel(res.key) + " integration. " +
+      seen + (question ? " They ask: " + question : " Describe what the screenshot shows and give the most relevant help.");
+    var a = answerFromKB(q, res.key, false);
+    sayAnswer(a);
+    return;
+  }
+  if (res.type === "disambiguate" && res.pivot) {
+    // Screenshot shows one app with several integrations — show the finding, then ask
+    var pkeys = combosForApp(kbIndex.combos, res.pivot);
+    var dchips = comboChips(pkeys);
+    var pq = "Screenshot analysis: this is about " + prettySeg(res.pivot) + ". " +
+      seen + (question ? " They ask: " + question : " Describe what the screenshot shows and give the most relevant help.");
+    pendingCombo = { query: pq, options: dchips.options };
+    pendingImageText = null;
+    botSay("📸 I can see this screenshot is about <b>" + prettySeg(res.pivot) + "</b>. 🙂<br><br>Which " +
+      prettySeg(res.pivot) + " integration is this about?", dchips.labels);
+    return;
+  }
+  // Fallback: run the normal pipeline on the screenshot text
+  var qf = seen + (question ? " They ask: " + question : " Describe what the screenshot shows and give the most relevant help.");
+  var af = answerFromKB(qf, null, false);
+  sayAnswer(af);
 }
 attachBtn.onclick = function () { fileInput.click(); };
 fileInput.onchange = function () {
