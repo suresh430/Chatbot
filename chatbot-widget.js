@@ -192,7 +192,7 @@ var DOMAIN_WORDS = {setup:1, install:1, installation:1, configure:1, configurati
   contact:1, contacts:1, deal:1, deals:1, payment:1, payments:1, tax:1, taxes:1,
   mapping:1, mapped:1, field:1, fields:1, api:1, webhook:1, automate:1, automation:1,
   manual:1, how:1, why:1, benefits:1, benefit:1, features:1, feature:1, advantages:1,
-  advantage:1};
+  advantage:1, step:1, steps:1, instructions:1, process:1};
 function isAppSeg(seg) {
   seg = (seg || "").toLowerCase();
   if (KNOWN_APPS.indexOf(seg) !== -1) return true; // full match first: "e-conomic", "danish-cvr"
@@ -1115,6 +1115,20 @@ function answerFromKB(q, comboFilter, isMemory) {
   }
   if (res.type === "clarify") {
     pendingCombo = null;
+    // Out-of-scope is never "vague" — decline politely instead of asking
+    // for more detail about something we can't help with. But a pure
+    // vague follow-up ("what about it?") has no meaningful words at all —
+    // that still gets the clarifying question.
+    var ctoks = tokenize(q.toLowerCase()), ci, meaningful = 0;
+    for (ci = 0; ci < ctoks.length; ci++) {
+      if (!VAGUE_STOPWORDS[ctoks[ci]] && namedApps(ctoks[ci]).length === 0) meaningful++;
+    }
+    if (meaningful > 0 && isOutOfScope(q)) {
+      return {
+        html: "I'm the Cloudify docs assistant, so I can only help with our accounting integrations (setup, invoicing, syncing, troubleshooting). 🙂 What would you like to know about them?",
+        chips: []
+      };
+    }
     return {
       html: "I want to point you to the right place — could you share a bit more detail about what you're trying to do? 🙂",
       chips: []
