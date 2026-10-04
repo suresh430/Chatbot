@@ -1236,25 +1236,28 @@ function answerScreenshot(ocrText, question) {
       // Use a clean query (OCR error text + question) so the search isn't diluted
       // by wrapper words, and require the docs to actually mention the error.
       var searchQ = ocrText.slice(0, 600) + " " + question;
-      var errWords = ocrText.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(" ")
-        .filter(function (w) { return w.length > 5 && ["screenshot", "visible", "visitor", "uploaded", "about", "which", "there", "their"].indexOf(w) === -1; });
       for (var i = 0; i < pkeys.length; i++) {
         pendingCombo = null;
         var ta = answerFromKB(searchQ, pkeys[i], false);
         if (ta && ta.html && ta.html.indexOf("submit a support ticket") === -1 &&
             ta.html.indexOf("point you to the right place") === -1) {
-          // Strict relevance: docs excerpts must contain the specific error terms
-          // (not just the word "error" somewhere). For "sync Person if Organization
-          // is missing", require person+organization or the distinctive phrase.
+          // Strict relevance: docs excerpts must contain a distinctive PHRASE from
+          // the error (not just individual common words like "person"/"select"
+          // which appear in many docs). Build phrases from the OCR text.
           var exText = (ta.rewrite && ta.rewrite.excerpts ? ta.rewrite.excerpts.join(" ") : "").toLowerCase();
-          var hasPersonOrg = exText.indexOf("person") !== -1 && exText.indexOf("organization") !== -1;
-          var hasDistinctive = exText.indexOf("organization is missing") !== -1 ||
-            exText.indexOf("alternate option") !== -1;
-          var overlap = 0;
-          for (var j = 0; j < errWords.length; j++) {
-            if (exText.indexOf(errWords[j]) !== -1) { overlap++; if (overlap >= 3) break; }
+          var cleanOcr = ocrText.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ");
+          var phrases = [];
+          var pw = cleanOcr.split(" ");
+          for (var k = 0; k < pw.length - 2; k++) {
+            if (pw[k].length > 3 && pw[k+1].length > 2 && pw[k+2].length > 3) {
+              phrases.push(pw[k] + " " + pw[k+1] + " " + pw[k+2]);
+            }
           }
-          if (hasPersonOrg || hasDistinctive || overlap >= 3) {
+          var phraseHits = 0;
+          for (var j = 0; j < phrases.length; j++) {
+            if (exText.indexOf(phrases[j]) !== -1) { phraseHits++; if (phraseHits >= 2) break; }
+          }
+          if (phraseHits >= 2) {
             // Show the deterministic docs answer directly: the Worker rewrite would
             // ticket-deflect when docs describe the error without a full solution,
             // but the docs content itself is what the visitor needs to see.
