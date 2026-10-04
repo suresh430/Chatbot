@@ -1243,13 +1243,14 @@ function answerScreenshot(ocrText, question) {
         var ta = answerFromKB(searchQ, pkeys[i], false);
         if (ta && ta.html && ta.html.indexOf("submit a support ticket") === -1 &&
             ta.html.indexOf("point you to the right place") === -1) {
-          // Relevance check: docs must mention the error or distinctive OCR words,
-          // otherwise it's a weak match (e.g. subscription plans for an error question)
-          var h = ta.html.toLowerCase();
-          var mentionsError = h.indexOf("error") !== -1 || h.indexOf("troubleshoot") !== -1 || h.indexOf("failed") !== -1;
+          // Relevance check against the DOCS EXCERPTS (not the full html — the
+          // appended closing text mentions "error" and would fool the check).
+          // Docs must mention the error or distinctive OCR words.
+          var exText = (ta.rewrite && ta.rewrite.excerpts ? ta.rewrite.excerpts.join(" ") : "").toLowerCase();
+          var mentionsError = exText.indexOf("error") !== -1 || exText.indexOf("troubleshoot") !== -1 || exText.indexOf("failed") !== -1;
           var overlap = 0;
           for (var j = 0; j < errWords.length; j++) {
-            if (h.indexOf(errWords[j]) !== -1) { overlap++; if (overlap >= 2) break; }
+            if (exText.indexOf(errWords[j]) !== -1) { overlap++; if (overlap >= 2) break; }
           }
           if (mentionsError || overlap >= 2) {
             // Show the deterministic docs answer directly: the Worker rewrite would
