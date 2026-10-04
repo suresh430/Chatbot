@@ -716,9 +716,12 @@ var Analytics = (function () {
       meta = pendingBotMeta || {};
       pendingBotMeta = null;
       if (lastUserTs && now - lastUserTs < 300000) meta.responseMs = now - lastUserTs;
-      // heuristic: ticket deflections and "can't help" replies are poor responses
-      if (/submit a support ticket|book a support call/i.test(text) && !/additionally|also/i.test(text)) meta.flagged = true;
-      else if (/couldn'?t (find|spot|make out)|i don'?t have|not sure/i.test(text)) meta.flagged = true;
+      // heuristic: ticket deflections and "can't help" replies are poor responses.
+      // Strip the standard support line first — it says "Book a support call"
+      // on every troubleshooting answer and is not a deflection by itself.
+      var checkText = text.replace(/Need more help\?[\s\S]*?support@cloudify\.biz/i, "support@cloudify.biz");
+      if (/submit a support ticket|book a support call/i.test(checkText) && !/additionally|also/i.test(checkText)) meta.flagged = true;
+      else if (/couldn'?t (find|spot|make out)|i don'?t have|not sure/i.test(checkText)) meta.flagged = true;
     }
     queue.push({
       message_id: uuid4(), role: role, text: text.slice(0, 5000), created_at: now,
