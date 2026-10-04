@@ -1227,11 +1227,25 @@ function answerScreenshot(ocrText, question) {
     return;
   }
   if (res.type === "disambiguate" && res.pivot) {
-    // Screenshot shows one app with several integrations — show the finding, then ask
     var pkeys = combosForApp(kbIndex.combos, res.pivot);
-    var dchips = comboChips(pkeys);
     var pq = "Screenshot analysis: this is about " + prettySeg(res.pivot) + ". " +
       seen + (question ? " They ask: " + question : " Describe what the screenshot shows and give the most relevant help.");
+    if (question) {
+      // Visitor asked a follow-up about the screenshot — try each of this app's
+      // integrations for a docs answer before asking them to pick one.
+      for (var i = 0; i < pkeys.length; i++) {
+        pendingCombo = null;
+        var ta = answerFromKB(pq, pkeys[i], false);
+        if (ta && ta.html && ta.html.indexOf("submit a support ticket") === -1 &&
+            ta.html.indexOf("point you to the right place") === -1) {
+          sayAnswer(ta); // found docs — answer directly
+          return;
+        }
+      }
+      pendingCombo = null;
+    }
+    // No question, or no combo had docs — show the finding, then ask
+    var dchips = comboChips(pkeys);
     pendingCombo = { query: pq, options: dchips.options };
     // keep pendingImageText — visitor may ask a follow-up about the screenshot
     // instead of picking a chip
