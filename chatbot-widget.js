@@ -1188,6 +1188,25 @@ function ocrImage(imgEl, cb) {
     })();
   });
 }
+// Ask the Worker to explain a screenshot error that has no docs coverage,
+// using the extracted error text and general Cloudify knowledge.
+function askExplain(ocrText, app, question) {
+  botSay("Let me look into that error for you… ⏳", []);
+  fetch(CFG.rewriteUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode: "explain", errorText: ocrText.slice(0, 1500), app: app || "", question: question || "" }),
+  }).then(function (r) { return r.json(); })
+  .then(function (data) {
+    if (data && data.html) {
+      botSay(sanitizeHtml(data.html) + "<br><br>" + supportLine(question || "screenshot error"), []);
+    } else {
+      botSay("I couldn't find docs on this specific error. Please email the screenshot to <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> and our team will help. 🙂", []);
+    }
+  }).catch(function () {
+    botSay("I couldn't find docs on this specific error. Please email the screenshot to <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a> and our team will help. 🙂", []);
+  });
+}
 // Answer a screenshot: analyze OCR text, identify the app, then answer.
 // - No supported apps in the screenshot → ask for a relevant screenshot.
 // - Apps resolve to one combo → answer directly for that integration.
@@ -1267,7 +1286,11 @@ function answerScreenshot(ocrText, question) {
           }
         }
       }
+      // No combo had relevant docs — ask the Worker to explain the error from
+      // the screenshot text itself (general knowledge, no docs required).
       pendingCombo = null;
+      askExplain(ocrText, prettySeg(res.pivot), question);
+      return;
     }
     // No question, or no combo had docs — show the finding, then ask
     var dchips = comboChips(pkeys);
