@@ -1238,6 +1238,10 @@ function answerScreenshot(ocrText, question) {
         var ta = answerFromKB(pq, pkeys[i], false);
         if (ta && ta.html && ta.html.indexOf("submit a support ticket") === -1 &&
             ta.html.indexOf("point you to the right place") === -1) {
+          // Show the deterministic docs answer directly: the Worker rewrite would
+          // ticket-deflect when docs describe the error without a full solution,
+          // but the docs content itself is what the visitor needs to see.
+          delete ta.rewrite;
           sayAnswer(ta); // found docs — answer directly
           return;
         }
