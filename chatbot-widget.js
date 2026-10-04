@@ -481,6 +481,9 @@ function resolveCombo(q, opts) {
     if (isVagueQuestion(q)) return { type: "clarify" };
     return { type: "combo", key: opts.activeCombo };
   }
+  // Clearly off-topic with no context — decline politely instead of
+  // asking "which integration?".
+  if (isOutOfScope(q)) return { type: "decline" };
   return { type: "disambiguate", pivot: null };
 }
 
@@ -1116,8 +1119,14 @@ function answerFromKB(q, comboFilter, isMemory) {
     pendingCombo = null;
     return { html: customComboMessage(q), chips: [] };
   }
-  if (res.type === "clarify") {
+  if (res.type === "decline") {
     pendingCombo = null;
+    return {
+      html: "I'm the Cloudify docs assistant, so I can only help with our accounting integrations (setup, invoicing, syncing, troubleshooting). 🙂 What would you like to know about them?",
+      chips: []
+    };
+  }
+  if (res.type === "clarify") {    pendingCombo = null;
     // Out-of-scope is never "vague" — decline politely instead of asking
     // for more detail about something we can't help with. But a pure
     // vague follow-up ("what about it?") has no meaningful words at all —
