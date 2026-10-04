@@ -1151,9 +1151,43 @@ function sayAnswer(a) {
 }
 
 /* ---------- file attachments ----------
- * Visitors can attach screenshots/files via the paperclip button. Files stay
- * on their device (nothing is uploaded); the bot is honest that it can't view
- * them and guides the visitor to describe the issue or email support. */
+ * Visitors can attach screenshots via the paperclip button. Images are read
+ * with Tesseract.js OCR entirely in the browser (nothing uploaded); the
+ * extracted text is then answered through the normal KB + AI pipeline.
+ * Non-image files can't be processed — the bot says so honestly. */
+var pendingImageText = null; // OCR text from the last screenshot — attached to the next question
+// Lazy-load Tesseract.js from CDN (only when a screenshot is uploaded)
+function loadTesseract(cb) {
+  if (window.Tesseract && window.Tesseract.createWorker) { cb(null); return; }
+  var s = document.createElement("script");
+  s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+  s.onload = function () { cb(null); };
+  s.onerror = function () { cb(new Error("load failed")); };
+  document.head.appendChild(s);
+}
+// Run OCR on an image element, return extracted text via callback
+function ocrImage(imgEl, cb) {
+  loadTesseract(function (err) {
+    if (err) { cb(null); return; }
+    (async function () {
+      try {
+        var worker = await window.Tesseract.createWorker("eng");
+        var res = await worker.recognize(imgEl);
+        await worker.terminate();
+        var t = (res && res.data && res.data.text ? res.data.text : "").replace(/\s+/g, " ").trim();
+        cb(t.length > 10 ? t : null);
+      } catch (e) { cb(null); }
+    })();
+  });
+}
+// Answer a screenshot: OCR text + optional question through the normal pipeline
+function answerScreenshot(ocrText, question) {
+  var q = "The visitor uploaded a screenshot showing this text: \"" +
+    ocrText.slice(0, 1500) + "\"." +
+    (question ? " They ask: " + question : " Describe what it shows and offer the most relevant help.");
+  var a = answerFromKB(q, null, false);
+  sayAnswer(a);
+}
 attachBtn.onclick = function () { fileInput.click(); };
 fileInput.onchange = function () {
   var f = fileInput.files && fileInput.files[0];
@@ -1169,8 +1203,32 @@ fileInput.onchange = function () {
     ? '<div class="cfb-attachment"><img src="' + url + '" alt="Attached screenshot"></div><div style="font-size:12px;opacity:.75;margin-top:4px">' + escapeHtml(f.name) + "</div>"
     : '<span class="cfb-attachchip">📄 ' + escapeHtml(f.name) + "</span>";
   addMsg("cfb-user", inner);
-  botSay("Thanks for sharing <b>" + escapeHtml(f.name) + "</b>! I can't view images or files directly, and nothing is uploaded — the file stays on your device. Could you describe what you're seeing in words? I'll do my best to help. If our team needs to see the file, please email it to <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a>.",
-    ["How do I connect my Xero account?", "How do I cancel my subscription?"]);
+  if (!isImg) {
+    botSay("Thanks for sharing <b>" + escapeHtml(f.name) + "</b>! I can only read images (screenshots/photos) — I can't open this file type. Could you describe what you need in words, or email it to <a href=\"mailto:" + SUPPORT_EMAIL + "\">" + SUPPORT_EMAIL + "</a>.", []);
+    return;
+  }
+  if (!CFG.rewriteUrl) {
+    botSay("Thanks for sharing <b>" + escapeHtml(f.name) + "</b>! I can't view images right now. Could you describe what you're seeing in words? I'll do my best to help.", []);
+    return;
+  }
+  botSay("Let me read your screenshot… ⏳", []);
+  var imgEl = new Image();
+  imgEl.onload = function () {
+    ocrImage(imgEl, function (ocrText) {
+      URL.revokeObjectURL(url);
+      if (!ocrText) {
+        botSay("I couldn't quite make out the text in that screenshot. Could you describe what you're seeing in words? 🙂", []);
+        return;
+      }
+      pendingImageText = ocrText; // next question gets screenshot context
+      answerScreenshot(ocrText, "");
+    });
+  };
+  imgEl.onerror = function () {
+    URL.revokeObjectURL(url);
+    botSay("I couldn't read that image file. Could you describe what you're seeing in words? 🙂", []);
+  };
+  imgEl.src = url;
 };
 
 function handleUser(text) {
@@ -1225,6 +1283,13 @@ function handleUser(text) {
   if (ir) { botSay(ir.html || escapeHtml(ir.text), ir.chips); return; }
   var lr = linkReply(text);
   if (lr) { botSay(lr, []); return; }
+  if (pendingImageText) {
+    // visitor uploaded a screenshot and then asked about it — answer with OCR context
+    var ocrT = pendingImageText;
+    pendingImageText = null;
+    answerScreenshot(ocrT, text);
+    return;
+  }
   if (CFG.apiUrl) { askApi(text); return; }
   if (kbFailed) {
     botSay("I'm having trouble reaching my knowledge base right now. 😅 Please <a href=\"" + CONTACT_URL + "\" target=\"_blank\" rel=\"noopener\">contact our team</a> directly — we'll get back to you quickly.", []);
