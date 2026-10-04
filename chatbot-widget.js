@@ -1233,7 +1233,8 @@ function answerScreenshot(ocrText, question) {
     var pq = "Screenshot analysis: this is about " + prettySeg(res.pivot) + ". " +
       seen + (question ? " They ask: " + question : " Describe what the screenshot shows and give the most relevant help.");
     pendingCombo = { query: pq, options: dchips.options };
-    pendingImageText = null;
+    // keep pendingImageText — visitor may ask a follow-up about the screenshot
+    // instead of picking a chip
     botSay("📸 I can see this screenshot is about <b>" + prettySeg(res.pivot) + "</b>. 🙂<br><br>Which " +
       prettySeg(res.pivot) + " integration is this about?", dchips.labels);
     return;
@@ -1329,6 +1330,7 @@ function handleUser(text) {
     }
     pendingCombo = null;
     activeCombo = key; // remember the explicit choice even if this answer fails
+    pendingImageText = null; // screenshot context consumed by the chip pick
     var a = answerFromKB(pq, key);
     sayAnswer(a);
     return;
