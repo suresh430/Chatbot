@@ -149,7 +149,9 @@ var SYNONYMS = {
   services: "solutions offerings", service: "solution",
   pricing: "price cost", price: "pricing cost", cost: "pricing price", prices: "pricing",
   demo: "trial demonstration", contact: "email phone reach",
-  company: "about us", integrations: "integration apps", integration: "integrations apps"
+  company: "about us", integrations: "integration apps", integration: "integrations apps",
+  payment: "payments payout payouts", payments: "payment payout payouts",
+  payout: "payouts payment payments", payouts: "payout payment payments"
 };
 function expandQuery(q) {
   var extra = [];
@@ -1010,6 +1012,12 @@ function linkReply(q) {
 function isTrouble(q) {
   return /\b(issue|issues|error|errors|problem|problems|facing|not working|isn'?t working|failed|fails|failure|trouble|stuck|broken)\b/i.test(q || "");
 }
+// An errors/troubleshooting docs page — the wrong source for a capability or
+// how-to question ("sync my payments") when feature/overview docs also matched.
+function isErrorPage(chunk) {
+  var t = ((chunk.title || "") + " " + (chunk.url || "")).toLowerCase();
+  return /error|troubleshoot|fix\b|fixes|issue|problem/.test(t);
+}
 function supportLine(q) {
   var mail = '<a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + "</a>";
   if (isTrouble(q)) {
@@ -1193,6 +1201,13 @@ function answerFromKB(q, comboFilter, isMemory) {
   if (isMemCtx && !results.length) {
     var full = search(kbIndex, expandQuery(q), 15).filter(goodMatch);
     if (full.length > 0) { results = full; index = kbIndex; memoryBypassed = true; }
+  }
+  // For non-troubleshooting questions, don't answer from an errors page when
+  // feature/overview docs matched too ("sync my payments" is a capability
+  // question, not an error report).
+  if (!isTrouble(q) && results.length) {
+    var nonErr = results.filter(function (r) { return !isErrorPage(r.chunk); });
+    if (nonErr.length) results = nonErr;
   }
   if (!results.length) {
     // No docs found in this combo.
